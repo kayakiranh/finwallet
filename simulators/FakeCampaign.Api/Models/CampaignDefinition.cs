@@ -10,6 +10,16 @@ public sealed class CampaignDefinition
     /// TR: Kampanya tanımını oluşturur ve indirim parametrelerinin pozitif/tutarlı olmasını zorunlu kılar.
     /// EN: Creates a campaign definition and requires its discount parameters to be positive and internally consistent.
     /// </summary>
+    /// <param name="id">TR: Provider kampanya kimliği. EN: Provider campaign identifier.</param>
+    /// <param name="merchantId">TR: Kampanyanın uygulanabildiği merchant kimliği. EN: Merchant identifier eligible for the campaign.</param>
+    /// <param name="currency">TR: Kampanyanın para birimi. EN: Currency of the campaign.</param>
+    /// <param name="startDate">TR: Kampanyanın başlangıç tarihi. EN: Campaign start date.</param>
+    /// <param name="endDate">TR: Kampanyanın bitiş tarihi. EN: Campaign end date.</param>
+    /// <param name="minimumAmount">TR: Kampanya için gereken minimum alışveriş tutarı. EN: Minimum purchase amount required for the campaign.</param>
+    /// <param name="discountType">TR: Yüzde veya sabit tutar indirim tipi. EN: Percentage or fixed-amount discount type.</param>
+    /// <param name="discountValue">TR: İndirim oranı veya sabit indirim tutarı. EN: Discount rate or fixed discount amount.</param>
+    /// <param name="maximumDiscount">TR: Tek işlemde uygulanabilecek maksimum indirim. EN: Maximum discount applicable to one transaction.</param>
+    /// <param name="sponsorType">TR: İndirimin maliyetini karşılayan taraf. EN: Party funding the discount.</param>
     public CampaignDefinition(
         string id,
         string merchantId,
