@@ -6,6 +6,8 @@ FinWallet treats every simulator as an external provider even though all simulat
 
 Rules:
 
+- Every simulator is an ASP.NET Core controller-based Web API; Minimal API route mappings are forbidden.
+- Every simulator success/error body uses `ServiceResult<T>` from the shared HTTP contract project.
 - FinWallet never reads a simulator database directly.
 - Provider DTOs remain in Infrastructure or simulator projects and never become Domain models.
 - Correlation IDs are propagated across HTTP boundaries.
@@ -18,9 +20,9 @@ Rules:
 
 ### Responsibility
 
-Simulates SMS and email providers. Registration OTP and financial notifications are delivered here instead of using a real commercial service.
+Simulates SMS and email providers. Registration OTP and financial notifications are delivered here instead of using a real commercial service. The current implemented HTTP surface includes SMS; email remains part of the communication-provider backlog.
 
-### POST `/api/v1/sms`
+### POST `/api/v1/communication/sms`
 
 Request:
 
@@ -33,27 +35,19 @@ Request:
 }
 ```
 
-Response: `202 Accepted`
-
-```json
-{
-  "messageId": "provider-message-guid",
-  "status": "Accepted",
-  "acceptedAt": "2026-08-09T13:00:00Z"
-}
-```
+Response: HTTP `202 Accepted` with `ServiceResult<SendMessageResponse>`.
 
 The message body can contain an OTP and must never be emitted to production logs.
 
 ### Development inspection
 
-`GET /api/v1/dev/messages/{messageId}` exposes the in-memory fake message record so a developer can inspect a simulated OTP/message without a real SMS provider. This is a simulator-only development endpoint and must never be copied into the main FinWallet API.
+`GET /api/v1/dev/messages/{messageId}` returns `ServiceResult<FakeMessageRecord>` so a developer can inspect a simulated OTP/message without a real SMS provider. This is a simulator-only development endpoint and must never be copied into the main FinWallet API.
 
 ### Failure simulation
 
 `X-Fake-Mode` supports:
 
-- `fail` — returns HTTP 503;
+- `fail` — returns HTTP 503 with a ServiceResult failure;
 - `delay` — delays the response approximately two seconds;
 - `timeout` — delays long enough for the FinWallet client timeout/cancellation behavior to be tested.
 
@@ -61,11 +55,11 @@ The simulator does not log OTP/message bodies.
 
 ### FinWallet adapter
 
-`FakeCommunicationGateway` implements the Application `ICommunicationGateway` boundary. It maps the internal registration intent into the external provider DTO and propagates `X-Correlation-Id`. Provider DTOs remain isolated under `FinWallet.Infrastructure.Communication`.
+`FakeCommunicationGateway` implements the Application `ICommunicationGateway` boundary. It maps the internal registration intent into the external provider DTO, calls `/api/v1/communication/sms`, and propagates `X-Correlation-Id`. Provider DTOs remain isolated under `FinWallet.Infrastructure.Communication`.
 
 ## FakeBank.Api
 
-Planned contract responsibilities:
+The service is controller-based and currently exposes a ServiceResult liveness endpoint. Planned contract responsibilities:
 
 - external customer/account creation;
 - currency-specific bank accounts;
@@ -78,7 +72,7 @@ Financial POST retry is forbidden unless protected by a provider idempotency/ext
 
 ## FakeFraud.Api
 
-Planned contract responsibilities:
+The service is controller-based and currently exposes a ServiceResult liveness endpoint. Planned contract responsibilities:
 
 - evaluate transaction/customer/device/merchant dummy risk signals;
 - return `Allow`, `Review` or `Deny` plus provider reference/reasons;
@@ -89,27 +83,32 @@ FinWallet combines internal and external fraud results using an explicit decisio
 
 ## FakeCutoff.Api
 
-Owns:
+### POST `/api/v1/cutoffs/evaluate`
+
+Implemented as `CutoffController`. It returns `ServiceResult<CutoffEvaluationResponse>` and owns:
 
 - business hours;
 - timezone interpretation;
 - weekends;
-- official holiday calendar;
+- simulated official-holiday seed data;
 - processing date;
 - settlement date;
 - bank/country/currency/transaction-type cutoff rules.
 
 FinWallet sends transaction context and consumes the returned processing/settlement decision. FinWallet does not duplicate holiday or cutoff calculations internally.
 
+The current holiday data is deterministic simulator data, not a production/legal holiday source.
+
 ## FakeCampaign.Api
 
-Owns:
+### POST `/api/v1/campaigns/evaluate`
+
+Implemented as `CampaignController`. It returns `ServiceResult<CampaignEvaluationResponse>` and owns:
 
 - merchant/campaign eligibility;
 - minimum transaction amount;
 - discount type/value;
 - maximum discount;
-- usage eligibility/limits;
 - campaign sponsor identity (`Platform` or `Merchant`).
 
 FinWallet remains responsible for accounting. A campaign response may calculate the discount, but the FinWallet ledger determines who funds that discount and ensures the merchant/customer/system entries remain balanced.
