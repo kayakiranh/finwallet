@@ -9,7 +9,7 @@
 | C# | 12 | Application language |
 | MSSQL | Planned integration | Durable persistence and financial source of truth |
 | Redis | Planned integration | Transient distributed state, OTP, fraud counters, idempotency hot cache and coordination |
-| JWT | Built-in ASP.NET Core authentication stack planned | Access-token authentication without ASP.NET Core Identity |
+| JWT | ASP.NET Core JwtBearer 8.0.29 | Short-lived access-token authentication without ASP.NET Core Identity |
 | JSON Lines files | Project policy | Masked structured financial/application/audit logging |
 | GitHub | Repository workflow | Source control, issues and pull requests |
 | Codex | Development workflow | Agent-assisted implementation, review and maintenance |
@@ -26,7 +26,24 @@ Every new package must be added through central package management in `Directory
 
 ## Current NuGet inventory
 
-No explicit third-party or additional Microsoft NuGet package has been added in the foundation branch yet. Current projects rely only on the SDK/framework references provided by `Microsoft.NET.Sdk` and `Microsoft.NET.Sdk.Web`.
+### Microsoft.AspNetCore.Authentication.JwtBearer
+
+| Field | Decision |
+|---|---|
+| Package | `Microsoft.AspNetCore.Authentication.JwtBearer` |
+| Version | `8.0.29` |
+| License | MIT |
+| Owner project(s) | `FinWallet.Api`, with token creation support implemented behind Application contracts in Infrastructure |
+| Purpose | ASP.NET Core JWT bearer validation and authentication integration |
+| Why required | The Web API must validate signed bearer access tokens using the supported ASP.NET Core authentication stack without ASP.NET Core Identity. |
+| Alternatives considered | Hand-written JWT parsing/validation was rejected because implementing a security token standard manually adds unnecessary security risk. ASP.NET Core Identity was rejected by explicit project requirement. |
+| Financial/security impact | Security-critical authentication dependency; version must remain on the supported .NET 8 patch line and be reviewed during dependency updates. |
+
+The package is Microsoft-maintained, open source and MIT licensed. Version `8.0.29` is the current .NET 8 patch available when this package decision was made in August 2026.
+
+## Password cryptography
+
+Password derivation does not add a NuGet dependency. FinWallet uses the .NET `System.Security.Cryptography` one-shot `Rfc2898DeriveBytes.Pbkdf2` API with a fixed PBKDF2-HMAC-SHA512 version-1 scheme, 220,000 iterations, a 32-byte random salt and a 64-byte derived hash. These parameters are security code constants rather than runtime options. A persisted hash-version field exists only for safe future migration.
 
 ## Package approval record format
 
@@ -50,7 +67,6 @@ The following capabilities will need explicit package decisions during implement
 - MSSQL client/data access
 - Redis client
 - structured file logging
-- JWT bearer authentication if an explicit package reference is required by the project setup
 - test frameworks and test infrastructure
 
 Package versions and licenses must be verified at the time they are introduced because dependency metadata can change.
