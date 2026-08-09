@@ -12,8 +12,6 @@ x-dotnet-common: &dotnet-common
     - /tmp:size=64m,mode=1777
   stop_grace_period: 20s
   pids_limit: 256
-  networks:
-    - finwallet-backend
   logging:
     driver: json-file
     options:
@@ -24,6 +22,7 @@ x-dotnet-common: &dotnet-common
     ASPNETCORE_URLS: http://+:8080
     DOTNET_RUNNING_IN_CONTAINER: "true"
     DOTNET_EnableDiagnostics: "0"
+    TZ: Etc/UTC
 
 x-provider-security: &provider-security
   Platform__Security__RequireInternalServiceKey: "true"
@@ -40,6 +39,7 @@ services:
       MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?Set MSSQL_SA_PASSWORD in .env}
     volumes:
       - mssql_data:/var/opt/mssql
+      - mssql_backup:/var/opt/mssql/backup
     networks:
       - finwallet-data
     healthcheck:
@@ -121,12 +121,13 @@ services:
       args:
         PROJECT_FILE: src/FinWallet.Api/FinWallet.Api.csproj
         BUILD_CONFIGURATION: Release
-    command:
-      - FinWallet.Api.dll
-    expose:
-      - "8080"
+    command: ["FinWallet.Api.dll"]
+    expose: ["8080"]
     mem_limit: 768m
     cpus: 2.0
+    networks:
+      - finwallet-backend
+      - finwallet-data
     environment:
       <<: *dotnet-environment
       FinWallet__Sql__ConnectionString: >-
@@ -163,6 +164,7 @@ services:
     expose: ["8080"]
     mem_limit: 384m
     cpus: 1.0
+    networks: [finwallet-backend]
     environment:
       <<: [*dotnet-environment, *provider-security]
 
@@ -178,6 +180,7 @@ services:
     expose: ["8080"]
     mem_limit: 384m
     cpus: 1.0
+    networks: [finwallet-backend]
     environment:
       <<: [*dotnet-environment, *provider-security]
 
@@ -193,6 +196,7 @@ services:
     expose: ["8080"]
     mem_limit: 256m
     cpus: 0.75
+    networks: [finwallet-backend]
     environment:
       <<: [*dotnet-environment, *provider-security]
 
@@ -208,6 +212,7 @@ services:
     expose: ["8080"]
     mem_limit: 256m
     cpus: 0.75
+    networks: [finwallet-backend]
     environment:
       <<: [*dotnet-environment, *provider-security]
 
@@ -223,6 +228,7 @@ services:
     expose: ["8080"]
     mem_limit: 256m
     cpus: 0.75
+    networks: [finwallet-backend]
     environment:
       <<: [*dotnet-environment, *provider-security]
 
@@ -234,12 +240,12 @@ services:
       args:
         PROJECT_FILE: src/FinWallet.Gateway/FinWallet.Gateway.csproj
         BUILD_CONFIGURATION: Release
-    command:
-      - FinWallet.Gateway.dll
+    command: ["FinWallet.Gateway.dll"]
     ports:
       - "${GATEWAY_PORT:-8080}:8080"
     mem_limit: 512m
     cpus: 1.5
+    networks: [finwallet-backend]
     environment:
       <<: *dotnet-environment
       FinWallet__Security__Jwt__Issuer: ${JWT_ISSUER:-finwallet-docker}
@@ -271,7 +277,6 @@ services:
 networks:
   finwallet-backend:
     driver: bridge
-    internal: false
   finwallet-data:
     driver: bridge
     internal: true
@@ -279,5 +284,7 @@ networks:
 volumes:
   mssql_data:
     name: ${COMPOSE_PROJECT_NAME:-finwallet}_mssql_data
+  mssql_backup:
+    name: ${COMPOSE_PROJECT_NAME:-finwallet}_mssql_backup
   redis_data:
     name: ${COMPOSE_PROJECT_NAME:-finwallet}_redis_data
