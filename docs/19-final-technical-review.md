@@ -31,7 +31,7 @@ Bu belge, Gateway/security/platform merge'lerinden sonraki mevcut `main` mimaris
 - Unit test mock kontrolü: önce eksikti; **xUnit + Moq eklendi**.
 - Register'dan transfera happy-path dokümanı: **tamamlandı**, fakat public funding eksikliği açıkça belirtilmiştir.
 - AI mimari karar anlatımı: **tamamlandı**.
-- Tüm dokümanların TR+EN olması: bu review branch'inde **tamamlanmaktadır**; önceki durumda eksikti.
+- Tüm maintained proje dokümanlarının TR+EN olması: **tamamlandı**.
 
 ### Bilinçli olarak appsettings'e taşınmayan değerler
 Kullanıcının “parametrik tüm elementler” talebi operasyonel/tuning değerleri için uygulanmıştır. Aşağıdaki değerler bilinçli olarak runtime switch değildir:
@@ -103,7 +103,7 @@ This document evaluates the current `main` architecture after the Gateway/securi
 - Unit-test mock verification: previously missing; **xUnit + Moq added**.
 - Registration-to-transfer happy-path document: **completed**, with the public-funding gap documented explicitly.
 - AI architecture decision narrative: **completed**.
-- All documentation in TR+EN: **being completed on this review branch**; it was previously incomplete.
+- All maintained project documentation in TR+EN: **completed**.
 
 ### Values intentionally not moved into appsettings
 The request for “all parameterized elements” was applied to operational and tuning values. The following deliberately remain non-runtime-switch invariants:
