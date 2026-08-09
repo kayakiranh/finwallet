@@ -66,6 +66,7 @@ builder.Services.AddSingleton(jwtSettings);
 builder.Services.AddSingleton<IAccessTokenIssuer, JwtAccessTokenIssuer>();
 
 builder.Services.AddScoped<RegisterCustomerHandler>();
+builder.Services.AddScoped<ResendRegistrationOtpHandler>();
 builder.Services.AddScoped<VerifyRegistrationOtpHandler>();
 builder.Services.AddScoped<LoginCustomerHandler>();
 builder.Services.AddScoped<RefreshSessionHandler>();
