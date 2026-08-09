@@ -1,0 +1,51 @@
+# syntax=docker/dockerfile:1.7
+
+FROM mcr.microsoft.com/dotnet/sdk:8.0-bookworm-slim AS build
+WORKDIR /src
+
+ARG PROJECT_FILE
+ARG BUILD_CONFIGURATION=Release
+
+# Copy project metadata first so NuGet restore remains cacheable when source files change.
+COPY Directory.Build.props Directory.Packages.props FinWallet.sln ./
+COPY src/FinWallet.Domain/*.csproj src/FinWallet.Domain/
+COPY src/FinWallet.Application/*.csproj src/FinWallet.Application/
+COPY src/FinWallet.Infrastructure/*.csproj src/FinWallet.Infrastructure/
+COPY src/FinWallet.Api/*.csproj src/FinWallet.Api/
+COPY src/FinWallet.Shared.Contracts/*.csproj src/FinWallet.Shared.Contracts/
+COPY src/FinWallet.Shared.Web/*.csproj src/FinWallet.Shared.Web/
+COPY src/FinWallet.Gateway/*.csproj src/FinWallet.Gateway/
+COPY simulators/FakeBank.Api/*.csproj simulators/FakeBank.Api/
+COPY simulators/FakeFraud.Api/*.csproj simulators/FakeFraud.Api/
+COPY simulators/FakeCutoff.Api/*.csproj simulators/FakeCutoff.Api/
+COPY simulators/FakeCampaign.Api/*.csproj simulators/FakeCampaign.Api/
+COPY simulators/FakeCommunication.Api/*.csproj simulators/FakeCommunication.Api/
+
+RUN --mount=type=cache,id=finwallet-nuget,target=/root/.nuget/packages \
+    dotnet restore "${PROJECT_FILE}"
+
+COPY . .
+
+RUN --mount=type=cache,id=finwallet-nuget,target=/root/.nuget/packages \
+    dotnet publish "${PROJECT_FILE}" \
+      --configuration "${BUILD_CONFIGURATION}" \
+      --output /app/publish \
+      --no-restore \
+      /p:UseAppHost=false
+
+FROM mcr.microsoft.com/dotnet/aspnet:8.0-bookworm-slim AS runtime
+WORKDIR /app
+
+ENV ASPNETCORE_HTTP_PORTS=8080 \
+    DOTNET_RUNNING_IN_CONTAINER=true \
+    DOTNET_EnableDiagnostics=0
+
+EXPOSE 8080
+
+COPY --from=build --chown=app:app /app/publish ./
+
+# .NET 8 official images contain the non-root 'app' user.
+USER app
+
+# The concrete DLL is supplied by Compose using `command`.
+ENTRYPOINT ["dotnet"]
