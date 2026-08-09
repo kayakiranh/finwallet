@@ -1,36 +1,29 @@
-# First Run Happy Path: Registration to Wallet Transfer
+# İlk Çalıştırma Happy Path: Kayıttan Wallet Transfer'a / First Run Happy Path: Registration to Wallet Transfer
 
-This document is written for someone seeing FinWallet for the first time. All client calls go through YARP Gateway.
+## Türkçe
 
-## Base URLs
+Bu doküman projeyi ilk kez gören biri içindir. Normal client çağrılarının tamamı YARP Gateway'e gider.
 
-Local development:
-
-```text
-Gateway:       http://localhost:8080
-FinWallet.Api: http://localhost:8081   # do not call directly for normal client flows
-```
-
-Use only the Gateway URL in the steps below.
-
-Example variables:
-
+### Base URL
 ```text
 {{gateway}} = http://localhost:8080
-{{tokenA}}  = JWT returned for Customer A
-{{tokenB}}  = JWT returned for Customer B
-{{walletA}} = Customer A TRY wallet ID
-{{walletB}} = Customer B TRY wallet ID
+```
+FinWallet.Api `:8081` normal client flow için doğrudan çağrılmamalıdır.
+
+Örnek değişkenler:
+```text
+{{tokenA}}  Customer A JWT
+{{tokenB}}  Customer B JWT
+{{walletA}} Customer A TRY wallet ID
+{{walletB}} Customer B TRY wallet ID
 ```
 
-## 1. Register Customer A
-
+### 1. Customer A register
 ```http
 POST {{gateway}}/api/v1/auth/register
 Content-Type: application/json
 X-Correlation-Id: demo-register-a
 ```
-
 ```json
 {
   "countryCode": "TR",
@@ -39,63 +32,28 @@ X-Correlation-Id: demo-register-a
   "password": "Example-Password-A-123!"
 }
 ```
+Beklenen: HTTP 202 ve registration pending response. `customerId` saklanır.
 
-Successful accepted response:
+**OTP notu:** FinWallet registration response içinde OTP döndürmez. FakeCommunication raw OTP'yi simulated SMS body olarak alır. Local test/debug instrumentation ile okunmalıdır; public API'ye OTP leak endpoint eklenmemelidir.
 
-```json
-{
-  "isSuccess": true,
-  "code": "REGISTRATION_ACCEPTED",
-  "message": "Registration accepted and verification is pending.",
-  "data": {
-    "customerId": "11111111-1111-4111-8111-111111111111",
-    "otpExpiresAt": "2026-08-09T19:45:00+00:00"
-  },
-  "errors": []
-}
-```
-
-Save `customerId` as `customerAId`.
-
-### Where is the OTP in local development?
-
-FinWallet never returns the OTP in the registration response. FakeCommunication receives the raw code as the simulated SMS body. The simulator currently has no public OTP-read endpoint by design. During local development obtain the code from the simulator under debugger/test instrumentation rather than adding an OTP leak to the public API.
-
-## 2. Verify Customer A
-
+### 2. Customer A OTP verify
 ```http
 POST {{gateway}}/api/v1/auth/registration/verify
 Content-Type: application/json
-X-Correlation-Id: demo-verify-a
 ```
-
 ```json
 {
-  "customerId": "11111111-1111-4111-8111-111111111111",
+  "customerId": "<customer-a-id>",
   "code": "123456"
 }
 ```
+Beklenen: HTTP 200 ve registration verified.
 
-Successful response:
-
-```json
-{
-  "isSuccess": true,
-  "code": "REGISTRATION_VERIFIED",
-  "message": "Registration verification completed.",
-  "data": null,
-  "errors": []
-}
-```
-
-## 3. Login Customer A
-
+### 3. Customer A login
 ```http
 POST {{gateway}}/api/v1/auth/login
 Content-Type: application/json
-X-Correlation-Id: demo-login-a
 ```
-
 ```json
 {
   "phoneNumber": "+905321111111",
@@ -103,169 +61,65 @@ X-Correlation-Id: demo-login-a
   "deviceId": "demo-device-a"
 }
 ```
+Response içindeki `accessToken` -> `tokenA` olarak saklanır. Token loglanmaz.
 
-Successful response shape:
-
-```json
-{
-  "isSuccess": true,
-  "code": "AUTHENTICATED",
-  "message": "Authentication completed successfully.",
-  "data": {
-    "customerId": "11111111-1111-4111-8111-111111111111",
-    "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-    "accessToken": "<JWT>",
-    "accessTokenExpiresAt": "2026-08-09T19:50:00+00:00",
-    "refreshToken": "<OPAQUE_REFRESH_TOKEN>",
-    "refreshTokenExpiresAt": "2026-08-23T19:40:00+00:00"
-  },
-  "errors": []
-}
-```
-
-Store `data.accessToken` as `tokenA`. Do not log it.
-
-## 4. Create Customer A TRY Wallet
-
+### 4. Customer A TRY wallet create
 ```http
 POST {{gateway}}/api/v1/wallets
 Authorization: Bearer {{tokenA}}
 Content-Type: application/json
-X-Correlation-Id: demo-wallet-a
 ```
-
 ```json
-{
-  "currency": "TRY"
-}
+{ "currency": "TRY" }
 ```
+İlk çağrı HTTP 201 `WALLET_CREATED`; aynı customer/currency tekrarında HTTP 200 `WALLET_EXISTS`. `walletId` -> `walletA`. Başlangıç available/blocked balance = 0.
 
-First creation returns HTTP 201 and code `WALLET_CREATED`. Calling the same customer/currency again returns the same durable wallet with code `WALLET_EXISTS` rather than creating a duplicate.
-
-Example data:
-
-```json
-{
-  "isSuccess": true,
-  "code": "WALLET_CREATED",
-  "message": "Wallet created successfully.",
-  "data": {
-    "walletId": "aaaaaaaa-1111-4111-8111-111111111111",
-    "currency": "TRY",
-    "availableBalance": 0.0000,
-    "blockedBalance": 0.0000,
-    "status": "Active"
-  },
-  "errors": []
-}
-```
-
-Save `walletId` as `walletA`.
-
-## 5. Open Customer A External Bank Account
-
-This step is optional for an internal wallet-to-wallet transfer, but it is part of the intended customer onboarding/business story.
-
+### 5. Customer A external bank account
+Wallet-to-wallet transfer için zorunlu değildir ama intended onboarding story'nin parçasıdır.
 ```http
 POST {{gateway}}/api/v1/bank-accounts
 Authorization: Bearer {{tokenA}}
 Content-Type: application/json
-X-Correlation-Id: demo-bank-account-a
 ```
-
 ```json
-{
-  "walletId": "aaaaaaaa-1111-4111-8111-111111111111"
-}
+{ "walletId": "{{walletA}}" }
 ```
+Provider pending ise HTTP 202 dönebilir. Retry aynı durable BankAccount ID'den deterministic provider request key ürettiği için duplicate account açmamalıdır.
 
-A provider-pending opening returns HTTP 202:
+### 6. Customer B register + verify + login
+Aynı 1-3 adımlarını farklı phone/email/device ile tekrarla. Örnek phone: `+905322222222`. Access token -> `tokenB`.
 
-```json
-{
-  "isSuccess": true,
-  "code": "BANK_ACCOUNT_PENDING",
-  "message": "Bank account opening is pending at the external provider.",
-  "data": {
-    "bankAccountId": "baaaaaaa-1111-4111-8111-111111111111",
-    "walletId": "aaaaaaaa-1111-4111-8111-111111111111",
-    "currency": "TRY",
-    "externalAccountId": "eaaaaaaa-1111-4111-8111-111111111111",
-    "externalIban": "<PROVIDER_ACCOUNT_NUMBER>",
-    "status": "Opening"
-  },
-  "errors": []
-}
-```
-
-Repeat the same request later if the account remains Opening. The durable internal BankAccount ID produces a deterministic provider request key, so a lost HTTP response does not create a second provider account.
-
-## 6. Register, verify and login Customer B
-
-Repeat steps 1-3 with a different phone/email/device.
-
-Example registration request:
-
-```json
-{
-  "countryCode": "TR",
-  "phoneNumber": "+905322222222",
-  "email": "customer.b@example.test",
-  "password": "Example-Password-B-123!"
-}
-```
-
-Store the returned access token as `tokenB`.
-
-## 7. Create Customer B TRY Wallet
-
+### 7. Customer B TRY wallet
 ```http
 POST {{gateway}}/api/v1/wallets
 Authorization: Bearer {{tokenB}}
 Content-Type: application/json
 ```
-
 ```json
-{
-  "currency": "TRY"
-}
+{ "currency": "TRY" }
 ```
+Wallet ID -> `walletB`.
 
-Save the returned wallet ID as `walletB`.
-
-## 8. Verify wallet state
-
-For either customer:
-
+### 8. Wallet list kontrolü
 ```http
 GET {{gateway}}/api/v1/wallets
 Authorization: Bearer {{tokenA}}
 ```
+JWT yok/geçersiz ise Gateway request'i backend'e göndermeden reddeder.
 
-The gateway rejects this request before proxying when the JWT is missing/invalid.
+### 9. Funding prerequisite — mevcut gap
+Yeni wallet 0 bakiye ile açılır. Public BankDeposit/funding endpoint'i **henüz yoktur**. Dolayısıyla yalnız public API ile `register -> fund -> successful transfer` tamamlanamaz.
 
-## 9. Funding prerequisite — current implementation gap
-
-A newly created wallet starts at zero balance. The current public FinWallet API does **not yet expose a BankDeposit/funding endpoint**.
-
-Therefore a fully executable `register -> newly created wallet -> successful transfer` cannot currently be completed using public endpoints alone.
-
-Do not solve this by manually running:
-
+Şunu yapma:
 ```sql
 UPDATE Wallets SET AvailableBalance = ...
 ```
+Bu Ledger'ı atlayarak para yaratır ve reconciliation'ı bozar.
 
-That would create money outside the double-entry ledger and invalidate reconciliation.
+Transfer demo/test için controlled integration fixture aynı atomik transaction içinde balance + FinancialTransaction + balanced LedgerJournal/Entries oluşturmalıdır. Sıradaki gerçek feature BankDeposit olmalıdır.
 
-Until the BankDeposit flow is implemented, a successful transfer test requires a controlled integration fixture that creates a balanced funding FinancialTransaction + LedgerJournal/Entries + wallet balance in one atomic operation. That fixture should live in the integration-test environment, not in the production API.
-
-The next financial feature should make this step a real bank-deposit endpoint.
-
-## 10. Execute wallet-to-wallet transfer
-
-Assuming `walletA` has been validly funded and both wallets are Active/TRY:
-
+### 10. Wallet transfer
+`walletA` geçerli şekilde fonlandıktan sonra:
 ```http
 POST {{gateway}}/api/v1/transfers
 Authorization: Bearer {{tokenA}}
@@ -273,72 +127,209 @@ Idempotency-Key: demo-transfer-a-to-b-0001
 Content-Type: application/json
 X-Correlation-Id: demo-transfer-a-to-b
 ```
-
 ```json
 {
-  "sourceWalletId": "aaaaaaaa-1111-4111-8111-111111111111",
-  "destinationWalletId": "bbbbbbbb-2222-4222-8222-222222222222",
+  "sourceWalletId": "{{walletA}}",
+  "destinationWalletId": "{{walletB}}",
   "amount": 125.50
 }
 ```
+Beklenen success: HTTP 200 `WALLET_TRANSFER_COMPLETED`, immutable `transactionId`, amount/currency/completedAt ve `wasReplay=false`.
 
-Successful response shape:
+### 11. Safe replay
+Aynı request + aynı `Idempotency-Key` tekrar gönderilir.
+Beklenen:
+- ikinci money movement yok;
+- ikinci ledger posting yok;
+- completed replay için ikinci fraud evaluation yok;
+- same transaction ID;
+- `WALLET_TRANSFER_REPLAYED`;
+- `wasReplay=true`.
 
-```json
-{
-  "isSuccess": true,
-  "code": "WALLET_TRANSFER_COMPLETED",
-  "message": "Wallet transfer completed successfully.",
-  "data": {
-    "transactionId": "cccccccc-3333-4333-8333-333333333333",
-    "sourceWalletId": "aaaaaaaa-1111-4111-8111-111111111111",
-    "destinationWalletId": "bbbbbbbb-2222-4222-8222-222222222222",
-    "amount": 125.50,
-    "currency": "TRY",
-    "completedAt": "2026-08-09T19:55:00+00:00",
-    "wasReplay": false
-  },
-  "errors": []
-}
+Aynı key farklı amount/destination ile gönderilirse conflict olur.
+
+### Gateway beklentileri
+| Request | Beklenen |
+|---|---|
+| Register/verify/login/refresh JWT olmadan | Gateway geçirir |
+| Wallet/bank-account/transfer JWT olmadan | Gateway reddeder |
+| `/providers/*` internal key olmadan | Gateway reddeder |
+| Backend business endpoint downstream key olmadan | Destination reddeder |
+| Rate/body/header limit aşımı | Business processing öncesi reddedilir |
+
+### Swagger
+```text
+http://localhost:8080/swagger  Gateway
+http://localhost:8081/swagger  FinWallet.Api
+http://localhost:8082/swagger  FakeBank
+http://localhost:8083/swagger  FakeFraud
+```
+Normal business çağrısı yine Gateway `:8080` üzerinden yapılır.
+
+---
+
+## English
+
+This document is for someone seeing the project for the first time. All normal client calls go through YARP Gateway.
+
+### Base URL
+```text
+{{gateway}} = http://localhost:8080
+```
+FinWallet.Api on `:8081` should not be called directly for normal client flows.
+
+Example variables:
+```text
+{{tokenA}}  Customer A JWT
+{{tokenB}}  Customer B JWT
+{{walletA}} Customer A TRY wallet ID
+{{walletB}} Customer B TRY wallet ID
 ```
 
-The exact response property names are defined by `WalletTransferResponse`; use Swagger generated from the current branch as the contract source when importing into Postman.
+### 1. Register Customer A
+```http
+POST {{gateway}}/api/v1/auth/register
+Content-Type: application/json
+X-Correlation-Id: demo-register-a
+```
+```json
+{
+  "countryCode": "TR",
+  "phoneNumber": "+905321111111",
+  "email": "customer.a@example.test",
+  "password": "Example-Password-A-123!"
+}
+```
+Expected: HTTP 202 with registration pending response. Save `customerId`.
 
-## 11. Replay the transfer safely
+**OTP note:** FinWallet never returns OTP in the registration response. FakeCommunication receives the raw OTP as the simulated SMS body. Read it only through local test/debug instrumentation; do not add a public OTP-leak endpoint.
 
-Send the exact same request with the exact same `Idempotency-Key`.
+### 2. Verify Customer A OTP
+```http
+POST {{gateway}}/api/v1/auth/registration/verify
+Content-Type: application/json
+```
+```json
+{
+  "customerId": "<customer-a-id>",
+  "code": "123456"
+}
+```
+Expected: HTTP 200 and registration verified.
 
-Expected result:
+### 3. Login Customer A
+```http
+POST {{gateway}}/api/v1/auth/login
+Content-Type: application/json
+```
+```json
+{
+  "phoneNumber": "+905321111111",
+  "password": "Example-Password-A-123!",
+  "deviceId": "demo-device-a"
+}
+```
+Store response `accessToken` as `tokenA`. Never log the token.
 
+### 4. Create Customer A TRY wallet
+```http
+POST {{gateway}}/api/v1/wallets
+Authorization: Bearer {{tokenA}}
+Content-Type: application/json
+```
+```json
+{ "currency": "TRY" }
+```
+First call: HTTP 201 `WALLET_CREATED`; repeat for the same customer/currency: HTTP 200 `WALLET_EXISTS`. Store `walletId` as `walletA`. Initial available/blocked balances are zero.
+
+### 5. Open Customer A external bank account
+Not required for an internal wallet transfer but part of the intended onboarding story.
+```http
+POST {{gateway}}/api/v1/bank-accounts
+Authorization: Bearer {{tokenA}}
+Content-Type: application/json
+```
+```json
+{ "walletId": "{{walletA}}" }
+```
+Provider pending may return HTTP 202. Retrying must not create a duplicate provider account because the durable BankAccount ID produces a deterministic provider request key.
+
+### 6. Register + verify + login Customer B
+Repeat steps 1-3 with different phone/email/device. Example phone: `+905322222222`. Store access token as `tokenB`.
+
+### 7. Create Customer B TRY wallet
+```http
+POST {{gateway}}/api/v1/wallets
+Authorization: Bearer {{tokenB}}
+Content-Type: application/json
+```
+```json
+{ "currency": "TRY" }
+```
+Store wallet ID as `walletB`.
+
+### 8. Verify wallet list
+```http
+GET {{gateway}}/api/v1/wallets
+Authorization: Bearer {{tokenA}}
+```
+If JWT is missing/invalid, Gateway rejects the request before forwarding it to the backend.
+
+### 9. Funding prerequisite — current gap
+A new wallet starts at zero balance. A public BankDeposit/funding endpoint **does not exist yet**, so public APIs alone cannot complete `register -> fund -> successful transfer`.
+
+Do not do this:
+```sql
+UPDATE Wallets SET AvailableBalance = ...
+```
+It creates money outside the Ledger and breaks reconciliation.
+
+For transfer demos/tests, a controlled integration fixture must atomically create balance + FinancialTransaction + balanced LedgerJournal/Entries. BankDeposit should be the next real feature.
+
+### 10. Wallet transfer
+After `walletA` has been validly funded:
+```http
+POST {{gateway}}/api/v1/transfers
+Authorization: Bearer {{tokenA}}
+Idempotency-Key: demo-transfer-a-to-b-0001
+Content-Type: application/json
+X-Correlation-Id: demo-transfer-a-to-b
+```
+```json
+{
+  "sourceWalletId": "{{walletA}}",
+  "destinationWalletId": "{{walletB}}",
+  "amount": 125.50
+}
+```
+Expected success: HTTP 200 `WALLET_TRANSFER_COMPLETED`, immutable `transactionId`, amount/currency/completedAt and `wasReplay=false`.
+
+### 11. Safe replay
+Send the same request with the same `Idempotency-Key` again.
+Expected:
 - no second money movement;
 - no second ledger posting;
 - no second fraud evaluation for a completed replay;
-- HTTP 200;
-- code `WALLET_TRANSFER_REPLAYED`;
-- same immutable transaction ID;
-- `wasReplay = true`.
+- same transaction ID;
+- `WALLET_TRANSFER_REPLAYED`;
+- `wasReplay=true`.
 
-Using the same key with a different amount/destination returns an idempotency conflict.
+Using the same key with a different amount/destination returns a conflict.
 
-## Gateway/auth expectations
-
-| Request | Expected gateway behavior |
+### Gateway expectations
+| Request | Expected behavior |
 |---|---|
-| Register/login/verify/refresh without JWT | Allowed to FinWallet.Api |
-| Wallet/bank-account/transfer without JWT | Rejected at Gateway |
-| Client calls `/providers/*` without internal service key | Rejected at Gateway |
-| Direct call to FinWallet.Api/simulator business endpoint without downstream key | Rejected by destination service |
-| Request exceeds gateway rate/body/header bounds | Rejected before business processing |
+| Register/verify/login/refresh without JWT | Gateway forwards |
+| Wallet/bank-account/transfer without JWT | Gateway rejects |
+| `/providers/*` without internal key | Gateway rejects |
+| Backend business endpoint without downstream key | Destination rejects |
+| Rate/body/header limits exceeded | Rejected before business processing |
 
-## Swagger URLs in development
-
-Each service has Swagger enabled by default in development. Examples:
-
+### Swagger
 ```text
-http://localhost:8080/swagger   Gateway
-http://localhost:8081/swagger   FinWallet.Api contract inspection
-http://localhost:8082/swagger   FakeBank
-http://localhost:8083/swagger   FakeFraud
+http://localhost:8080/swagger  Gateway
+http://localhost:8081/swagger  FinWallet.Api
+http://localhost:8082/swagger  FakeBank
+http://localhost:8083/swagger  FakeFraud
 ```
-
-Normal business calls should still be executed through `http://localhost:8080`.
+Normal business calls still go through Gateway `:8080`.
