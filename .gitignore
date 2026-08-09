@@ -1,0 +1,129 @@
+# Build output
+**/bin/
+**/obj/
+**/out/
+**/publish/
+**/Debug/
+**/Release/
+artifacts/
+
+# Visual Studio / Rider / IDE
+.vs/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.rsuser
+*.DotSettings.user
+_ReSharper*/
+*.resharper
+
+# VS Code local state
+.vscode/
+
+# Test / coverage / benchmark output
+TestResults/
+**/TestResults/
+coverage/
+coverage-*/
+*.coverage
+*.coveragexml
+*.trx
+*.testlog
+BenchmarkDotNet.Artifacts/
+
+# NuGet / package output
+*.nupkg
+*.snupkg
+packages/
+.nuget/
+
+# Logs / diagnostics / dumps
+logs/
+**/logs/
+*.log
+*.log.*
+*.dmp
+*.dump
+*.gcdump
+*.trace
+*.nettrace
+*.speedscope.json
+
+# Local runtime data
+.data/
+data/
+tmp/
+.temp/
+.cache/
+
+# Local application settings and secrets
+.env
+.env.*
+!.env.example
+appsettings.Local.json
+appsettings.local.json
+appsettings.*.Local.json
+appsettings.*.local.json
+secrets.json
+**/secrets/
+*.secret
+*.secrets
+
+# Certificates / private keys
+*.pfx
+*.p12
+*.pem
+*.key
+*.crt
+*.cer
+*.der
+
+# Docker local overrides / generated state
+docker-compose.local.yml
+docker-compose.local.yaml
+compose.local.yml
+compose.local.yaml
+.docker/
+
+# Database local files / backups
+*.mdf
+*.ldf
+*.ndf
+*.bak
+*.bacpac
+*.dacpac
+
+# Redis persistence generated outside managed Docker volumes
+dump.rdb
+appendonly.aof
+appendonlydir/
+
+# OS generated files
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Temporary/editor files
+*~
+*.tmp
+*.temp
+*.swp
+*.swo
+*.orig
+*.rej
+
+# Local tooling
+.local/
+.tooling/
+
+# Generated PDFs are intentionally versioned under docs/pdf.
+!docs/pdf/
+!docs/pdf/**
