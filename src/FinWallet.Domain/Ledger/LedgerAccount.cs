@@ -6,10 +6,7 @@ namespace FinWallet.Domain.Ledger;
 /// </summary>
 public sealed class LedgerAccount
 {
-    /// <summary>
-    /// TR: Yeni aktif ledger hesabı oluşturur.
-    /// EN: Creates a new active ledger account.
-    /// </summary>
+    /// <summary>TR: Yeni aktif ledger hesabı oluşturur. EN: Creates a new active ledger account.</summary>
     /// <param name="id">TR: Ledger hesabının benzersiz kimliği. EN: Unique ledger-account identifier.</param>
     /// <param name="code">TR: İnsan ve sistem tarafından izlenebilir benzersiz hesap kodu. EN: Human/system traceable unique account code.</param>
     /// <param name="currency">TR: Hesabın kabul ettiği üç harfli para birimi kodu. EN: Three-letter currency code accepted by the account.</param>
@@ -19,6 +16,7 @@ public sealed class LedgerAccount
         if (id == Guid.Empty) throw new ArgumentException("Ledger-account identifier cannot be empty.", nameof(id));
         ArgumentException.ThrowIfNullOrWhiteSpace(code);
         ArgumentException.ThrowIfNullOrWhiteSpace(currency);
+        if (!Enum.IsDefined(type)) throw new ArgumentOutOfRangeException(nameof(type));
 
         var normalizedCurrency = currency.Trim().ToUpperInvariant();
         if (normalizedCurrency.Length != 3) throw new ArgumentException("Ledger currency must contain exactly three characters.", nameof(currency));
@@ -28,6 +26,23 @@ public sealed class LedgerAccount
         Currency = normalizedCurrency;
         Type = type;
         Status = LedgerAccountStatus.Active;
+    }
+
+    /// <summary>TR: Persisted ledger hesabını reflection kullanmadan kontrollü biçimde yeniden oluşturur. EN: Rehydrates a persisted ledger account in a controlled way without reflection.</summary>
+    /// <param name="id">TR: Persisted ledger account kimliği. EN: Persisted ledger-account identifier.</param>
+    /// <param name="code">TR: Persisted ledger account kodu. EN: Persisted ledger-account code.</param>
+    /// <param name="currency">TR: Persisted currency kodu. EN: Persisted currency code.</param>
+    /// <param name="type">TR: Persisted muhasebe hesap sınıfı. EN: Persisted accounting account class.</param>
+    /// <param name="status">TR: Persisted lifecycle durumu. EN: Persisted lifecycle state.</param>
+    /// <returns>TR: Persisted state'i taşıyan LedgerAccount nesnesini döndürür. EN: Returns a LedgerAccount carrying persisted state.</returns>
+    public static LedgerAccount Restore(Guid id, string code, string currency, LedgerAccountType type, LedgerAccountStatus status)
+    {
+        if (!Enum.IsDefined(status)) throw new ArgumentOutOfRangeException(nameof(status));
+        var account = new LedgerAccount(id, code, currency, type)
+        {
+            Status = status
+        };
+        return account;
     }
 
     /// <summary>TR: Ledger hesabının benzersiz kimliğini döndürür. EN: Gets unique ledger-account identifier.</summary>
@@ -45,10 +60,7 @@ public sealed class LedgerAccount
     /// <summary>TR: Ledger hesabının mevcut lifecycle durumunu döndürür. EN: Gets current ledger-account lifecycle state.</summary>
     public LedgerAccountStatus Status { get; private set; }
 
-    /// <summary>
-    /// TR: Ledger hesabını yeni journal entry kabul etmeyecek şekilde kapatır; geçmiş ledger kayıtlarını değiştirmez.
-    /// EN: Closes the ledger account to new journal entries without changing historical ledger records.
-    /// </summary>
+    /// <summary>TR: Ledger hesabını yeni journal entry kabul etmeyecek şekilde kapatır; geçmiş ledger kayıtlarını değiştirmez. EN: Closes the ledger account to new journal entries without changing historical ledger records.</summary>
     public void Close()
     {
         Status = LedgerAccountStatus.Closed;
