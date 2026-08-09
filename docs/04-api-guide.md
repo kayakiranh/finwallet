@@ -1,198 +1,105 @@
-# FinWallet API Guide
+# FinWallet API Rehberi / API Guide
 
-## Public entry point
+## Türkçe
 
-Normal clients call YARP Gateway, not FinWallet.Api directly.
-
-Local development:
-
+### Public giriş noktası
+Normal client yalnız Gateway'i çağırır:
 ```text
 http://localhost:8080
 ```
+Ana business prefix: `/api/v1`.
 
-Main business path prefix:
+Anonymous Gateway rotaları:
+- `POST /api/v1/auth/register`
+- `POST /api/v1/auth/registration/verify`
+- `POST /api/v1/auth/login`
+- `POST /api/v1/auth/refresh`
 
-```text
-/api/v1
-```
+Diğer `/api/*` rotaları Gateway'de JWT ister. FinWallet.Api JWT/authorization/ownership kontrolünü ayrıca tekrar yapar.
 
-Gateway routes anonymous authentication endpoints to FinWallet.Api. Other `/api/*` routes require a valid JWT at the Gateway before proxying.
-
-FinWallet.Api remains independently authenticated/authorized and destination services require the Gateway downstream service credential, so the proxy is an outer boundary rather than the only security control.
-
-## Controller-based APIs
-
-All project HTTP services use ASP.NET Core controllers. Minimal API mappings are not used.
-
-## ServiceResult
-
-Controller success/failure bodies and platform authentication/rate-limit failures use `ServiceResult<T>`.
-
-Clients should branch on:
-
+### Ortak HTTP contract
+Tüm success/failure body'leri `ServiceResult<T>` kullanır. Client logic sırası:
 1. HTTP status;
-2. stable machine-readable `code`.
+2. stabil `code`.
 
-Do not parse human-readable `message` text for application logic.
+Human-readable `message` business logic için parse edilmemelidir.
 
-`ServiceResult<T>` remains an HTTP contract; Domain/Application do not depend on it.
+### Correlation
+Client `X-Correlation-Id` gönderebilir. Shared web platform yalnız bounded alphanumeric/`-`/`_` formatını kabul eder; geçersiz veya eksik değer yerine yeni ID üretir. Correlation ID transaction veya idempotency key değildir ve PII içermemelidir.
 
-## Correlation
-
-A caller may send:
-
-```http
-X-Correlation-Id: mobile-request-123
-```
-
-The shared web platform accepts only bounded alphanumeric/`-`/`_` values. Invalid or absent values are replaced with a generated correlation ID. The resulting value becomes the ASP.NET trace identifier and is returned in the response header.
-
-Correlation ID is not a transaction ID or idempotency key and must not contain PII.
-
-## Authentication
-
-Protected endpoints use:
-
+### Authentication
+Protected endpoint:
 ```http
 Authorization: Bearer <access-token>
 ```
+JWT Gateway ve FinWallet.Api'de doğrulanır. Para değiştiren transfer akışı ayrıca JWT `sid` değerini durable CustomerSession ile kontrol eder.
 
-JWT is validated at Gateway and again by FinWallet.Api. High-risk transfer flows additionally validate durable server-side session state using `sid`.
-
-Raw access/refresh tokens must never be logged.
-
-## Idempotency
-
-Money-changing wallet transfer requires:
-
-```http
-Idempotency-Key: <stable-client-generated-key>
-```
-
-Wallet creation is not a money movement and is idempotent through the `(CustomerId, Currency)` uniqueness invariant.
-
-Provider request keys are separate from client idempotency and correlation IDs.
-
-## Swagger
-
-Every Web API has Swagger/OpenAPI through `FinWallet.Shared.Web`.
-
-Development defaults:
-
+### Swagger
+Development:
 ```text
-Gateway:             http://localhost:8080/swagger
-FinWallet.Api:       http://localhost:8081/swagger
-FakeBank.Api:        http://localhost:8082/swagger
-FakeFraud.Api:       http://localhost:8083/swagger
-FakeCutoff.Api:      http://localhost:8084/swagger
-FakeCampaign.Api:    http://localhost:8085/swagger
-FakeCommunication:   http://localhost:8086/swagger
+Gateway             http://localhost:8080/swagger
+FinWallet.Api       http://localhost:8081/swagger
+FakeBank.Api        http://localhost:8082/swagger
+FakeFraud.Api       http://localhost:8083/swagger
+FakeCutoff.Api      http://localhost:8084/swagger
+FakeCampaign.Api    http://localhost:8085/swagger
+FakeCommunication   http://localhost:8086/swagger
 ```
+Production'da Swagger varsayılan kapalıdır.
 
-Production Swagger is disabled by default through `appsettings.Production.json`.
+### Auth endpointleri
+**Register** — `POST /api/v1/auth/register`  
+Pending customer oluşturur ve OTP'yi FakeCommunication'a gönderir. Başarı: HTTP 202.
 
-Swagger visibility never bypasses endpoint authorization.
+**Verify** — `POST /api/v1/auth/registration/verify`  
+OTP verify+consume yapar ve customer'ı aktive eder.
 
-## Authentication endpoints
+**Login** — `POST /api/v1/auth/login`  
+Credential doğrular, durable session, access token ve refresh token üretir.
 
-### POST `/api/v1/auth/register`
+**Refresh** — `POST /api/v1/auth/refresh`  
+Opaque refresh token rotation yapar; token single-use'dur ve reuse detection session family revoke eder.
 
-Anonymous at Gateway. Creates pending customer + credentials and sends OTP through FakeCommunication via Gateway.
+**Logout** — henüz public endpoint olarak uygulanmadı.
 
-Success: HTTP 202 / `REGISTRATION_ACCEPTED`.
-
-### POST `/api/v1/auth/registration/verify`
-
-Anonymous at Gateway. Verifies/consumes OTP and activates eligible customer.
-
-Success: HTTP 200 / `REGISTRATION_VERIFIED`.
-
-### POST `/api/v1/auth/login`
-
-Anonymous at Gateway. Validates active customer credentials and creates device-bound server session + access/refresh tokens.
-
-Success: HTTP 200 / `AUTHENTICATED`.
-
-### POST `/api/v1/auth/refresh`
-
-Anonymous at Gateway because the opaque refresh token is the credential for this operation. Rotation remains server-side and single-use.
-
-### POST `/api/v1/auth/logout`
-
-Not implemented yet.
-
-## Wallet endpoints
-
-### POST `/api/v1/wallets`
-
-Requires JWT.
-
-Request:
-
+### Wallet endpointleri
+**POST `/api/v1/wallets`** — JWT gerekir.
 ```json
-{
-  "currency": "TRY"
-}
+{ "currency": "TRY" }
 ```
+Desteklenen currency: `TRY`, `USD`, `EUR`. İlk create 201, aynı customer/currency tekrarında mevcut wallet 200 döner. Yeni wallet sıfır available/blocked balance ile başlar.
 
-Supported values: `TRY`, `USD`, `EUR`.
+**GET `/api/v1/wallets`** — JWT subject'e ait wallet'ları listeler.
 
-Behavior:
-
-- first customer/currency wallet: HTTP 201 / `WALLET_CREATED`;
-- repeated request: HTTP 200 / `WALLET_EXISTS`;
-- concurrent duplicate create converges on DB winner;
-- new wallet begins with zero available/blocked balance;
-- API cannot mint an initial balance.
-
-### GET `/api/v1/wallets`
-
-Requires JWT. Returns wallets owned by authenticated JWT subject.
-
-## Bank-account endpoint
-
-### POST `/api/v1/bank-accounts`
-
-Requires JWT.
-
+### Bank account
+**POST `/api/v1/bank-accounts`** — JWT gerekir.
 ```json
-{
-  "walletId": "f98c4910-44c4-42fb-9ff1-c2cd9c0f73bd"
-}
+{ "walletId": "<wallet-guid>" }
 ```
-
-Flow:
-
+Akış:
 ```text
 Gateway JWT
--> FinWallet JWT/ownership
+-> API JWT + ownership
 -> durable BankAccount(Opening)
--> SQL operation completes
--> FinWallet calls Gateway /providers/bank/* with internal caller key
--> Gateway validates caller and injects downstream key
+-> SQL tamamlanır
+-> Gateway /providers/bank/*
 -> FakeBank
--> validate provider identity/currency
--> CAS-update internal BankAccount state
+-> provider result validation
+-> CAS state update
 ```
+External HTTP açık SQL transaction içinde çalışmaz.
 
-No provider HTTP call executes while a FinWallet SQL transaction is held open.
-
-Provider request-key is deterministic from durable internal BankAccount ID, so timeout/lost-response retry does not create a duplicate provider account.
-
-## Wallet transfer endpoint
-
-### POST `/api/v1/transfers`
-
-Requires:
-
+### Wallet transfer
+**POST `/api/v1/transfers`** gerekir:
 - JWT;
-- active durable financial session;
+- active durable session;
 - `Idempotency-Key`;
-- valid source ownership/destination/currency/lifecycle;
-- internal + external fraud Allow;
-- sufficient source balance.
-
-Request:
+- owned/active source wallet;
+- distinct active destination;
+- aynı currency;
+- positive/bounded amount;
+- final fraud Allow;
+- yeterli bakiye.
 
 ```http
 POST /api/v1/transfers
@@ -200,7 +107,6 @@ Authorization: Bearer <JWT>
 Idempotency-Key: transfer-000001
 Content-Type: application/json
 ```
-
 ```json
 {
   "sourceWalletId": "aaaaaaaa-1111-4111-8111-111111111111",
@@ -209,40 +115,22 @@ Content-Type: application/json
 }
 ```
 
-Execution order:
-
+Sıra:
 ```text
-completed durable replay check
--> durable server session/risk signals
+completed replay
+-> session/risk
 -> internal fraud
--> FakeFraud through Gateway
--> final fraud decision
+-> FakeFraud via Gateway
+-> combined decision
 -> atomic MSSQL posting
 ```
 
-Atomic posting includes:
+Completed replay aynı immutable transaction'ı döndürür; ikinci fraud evaluation veya ikinci money movement yapılmaz.
 
-- durable idempotency state;
-- source/destination balance changes;
-- FinancialTransaction;
-- LedgerJournal;
-- LedgerEntries;
-- persisted Debit/Credit equality verification.
+### Funding durumu
+Public BankDeposit endpoint'i henüz yoktur. Yeni wallet 0 bakiye ile açıldığı için register'dan sonra public endpointlerle kaynak wallet'ı fonlayıp transfer etmek mümkün değildir. Test fixture doğrudan balance UPDATE etmemeli; balanced FinancialTransaction + LedgerJournal/Entries oluşturmalıdır.
 
-External fraud is fail-closed. If it times out/fails/malforms, financial posting does not start.
-
-Completed replay uses the same idempotency key/request and returns the immutable original transaction without a second money movement or second fraud evaluation.
-
-## Funding status
-
-New wallets start with zero balance. A public BankDeposit/funding endpoint is not implemented yet. Therefore a successful transfer from a newly registered wallet requires a controlled integration fixture that creates a balanced funding transaction/ledger state. Directly updating `Wallets.AvailableBalance` is invalid because it bypasses the ledger.
-
-See `16-happy-path-onboarding.md`.
-
-## Provider/internal routes
-
-Provider routes are not public client APIs:
-
+### Internal/provider rotaları
 ```text
 /providers/bank/*
 /providers/fraud/*
@@ -250,41 +138,162 @@ Provider routes are not public client APIs:
 /providers/campaign/*
 /providers/communication/*
 ```
+Bunlar public client API değildir. Gateway internal-service authorization ister; destination business endpoint ayrıca downstream service key doğrular.
 
-They require Gateway `InternalService` authorization. Destination provider APIs then require the separate downstream service credential.
+### Platform hata örnekleri
+- JWT yok/geçersiz: 401 `GATEWAY_UNAUTHORIZED`.
+- Direct backend without downstream key: 401 `INTERNAL_SERVICE_UNAUTHORIZED`.
+- Rate limit: 429 `RATE_LIMITED`.
+- Unsupported write content type: 415.
+- TRACE/CONNECT: 405.
+- Body/header limit aşımı: business processing başlamadan reddedilir.
 
-## HTTP/platform failures
+---
 
-Examples:
+## English
 
-- missing/invalid JWT at Gateway: 401 `GATEWAY_UNAUTHORIZED`;
-- direct provider call without internal caller key: 403/authorization rejection at Gateway;
-- direct backend call without downstream key: 401 `INTERNAL_SERVICE_UNAUTHORIZED`;
+### Public entry point
+Normal clients call only the Gateway:
+```text
+http://localhost:8080
+```
+Main business prefix: `/api/v1`.
+
+Anonymous Gateway routes:
+- `POST /api/v1/auth/register`
+- `POST /api/v1/auth/registration/verify`
+- `POST /api/v1/auth/login`
+- `POST /api/v1/auth/refresh`
+
+Other `/api/*` routes require JWT at the Gateway. FinWallet.Api independently repeats JWT, authorization and ownership checks.
+
+### Common HTTP contract
+All success/failure bodies use `ServiceResult<T>`. Client logic should branch on:
+1. HTTP status;
+2. stable `code`.
+
+Human-readable `message` text must not be parsed for business logic.
+
+### Correlation
+Clients may send `X-Correlation-Id`. The shared web platform accepts only bounded alphanumeric/`-`/`_` values; invalid or absent values are replaced. Correlation IDs are not transaction or idempotency keys and must not contain PII.
+
+### Authentication
+Protected endpoints use:
+```http
+Authorization: Bearer <access-token>
+```
+JWT is validated at both Gateway and FinWallet.Api. Money-changing transfer also validates JWT `sid` against durable CustomerSession state.
+
+### Swagger
+Development:
+```text
+Gateway             http://localhost:8080/swagger
+FinWallet.Api       http://localhost:8081/swagger
+FakeBank.Api        http://localhost:8082/swagger
+FakeFraud.Api       http://localhost:8083/swagger
+FakeCutoff.Api      http://localhost:8084/swagger
+FakeCampaign.Api    http://localhost:8085/swagger
+FakeCommunication   http://localhost:8086/swagger
+```
+Swagger is disabled by default in production.
+
+### Authentication endpoints
+**Register** — `POST /api/v1/auth/register`  
+Creates a pending customer and sends OTP through FakeCommunication. Success: HTTP 202.
+
+**Verify** — `POST /api/v1/auth/registration/verify`  
+Verifies/consumes OTP and activates the customer.
+
+**Login** — `POST /api/v1/auth/login`  
+Validates credentials and creates durable session, access token and refresh token.
+
+**Refresh** — `POST /api/v1/auth/refresh`  
+Rotates an opaque single-use refresh token; reuse detection revokes the session family.
+
+**Logout** — not yet implemented as a public endpoint.
+
+### Wallet endpoints
+**POST `/api/v1/wallets`** — requires JWT.
+```json
+{ "currency": "TRY" }
+```
+Supported currencies: `TRY`, `USD`, `EUR`. First create returns 201; repeating the same customer/currency returns the existing wallet with 200. New wallets start with zero available and blocked balance.
+
+**GET `/api/v1/wallets`** — lists wallets owned by the JWT subject.
+
+### Bank account
+**POST `/api/v1/bank-accounts`** — requires JWT.
+```json
+{ "walletId": "<wallet-guid>" }
+```
+Flow:
+```text
+Gateway JWT
+-> API JWT + ownership
+-> durable BankAccount(Opening)
+-> SQL completes
+-> Gateway /providers/bank/*
+-> FakeBank
+-> provider result validation
+-> CAS state update
+```
+External HTTP never runs inside an open SQL transaction.
+
+### Wallet transfer
+**POST `/api/v1/transfers`** requires:
+- JWT;
+- active durable session;
+- `Idempotency-Key`;
+- owned/active source wallet;
+- distinct active destination;
+- same currency;
+- positive/bounded amount;
+- final fraud Allow;
+- sufficient balance.
+
+```http
+POST /api/v1/transfers
+Authorization: Bearer <JWT>
+Idempotency-Key: transfer-000001
+Content-Type: application/json
+```
+```json
+{
+  "sourceWalletId": "aaaaaaaa-1111-4111-8111-111111111111",
+  "destinationWalletId": "bbbbbbbb-2222-4222-8222-222222222222",
+  "amount": 125.50
+}
+```
+
+Order:
+```text
+completed replay
+-> session/risk
+-> internal fraud
+-> FakeFraud via Gateway
+-> combined decision
+-> atomic MSSQL posting
+```
+
+A completed replay returns the same immutable transaction without a second fraud evaluation or money movement.
+
+### Funding status
+No public BankDeposit endpoint exists yet. Because a new wallet starts at zero, the source wallet cannot currently be funded after registration using public endpoints alone. Test fixtures must create a balanced FinancialTransaction + LedgerJournal/Entries rather than directly updating the wallet balance.
+
+### Internal/provider routes
+```text
+/providers/bank/*
+/providers/fraud/*
+/providers/cutoff/*
+/providers/campaign/*
+/providers/communication/*
+```
+These are not public client APIs. Gateway requires internal-service authorization and destination business endpoints additionally validate the downstream service key.
+
+### Platform failure examples
+- missing/invalid JWT: 401 `GATEWAY_UNAUTHORIZED`;
+- direct backend without downstream key: 401 `INTERNAL_SERVICE_UNAUTHORIZED`;
 - rate limit: 429 `RATE_LIMITED`;
-- unsupported write content type: 415 `UNSUPPORTED_MEDIA_TYPE`;
-- blocked TRACE/CONNECT: 405 `METHOD_NOT_ALLOWED`;
-- request too large: rejected by Kestrel/YARP before business processing.
-
-## Financial error examples
-
-- invalid financial session: 401 `TRANSFER_SESSION_INVALID`;
-- fraud deny: 403 `TRANSFER_FRAUD_DENIED`;
-- fraud review: 202 `TRANSFER_REVIEW_REQUIRED` and no money movement;
-- missing wallet: 404;
-- idempotency payload conflict: 409 `IDEMPOTENCY_CONFLICT`;
-- insufficient balance: 409 `INSUFFICIENT_BALANCE`;
-- fraud dependency unavailable: 503 `FRAUD_DEPENDENCY_UNAVAILABLE`;
-- currency mismatch: 400 `CURRENCY_MISMATCH`.
-
-## Request limits
-
-Gateway and backends use config-driven:
-
-- per-IP fixed-window rate limits;
-- request-body limits;
-- header-count/total-size limits;
-- request-header timeout;
-- keep-alive timeout;
-- max concurrent connections.
-
-Public limits are intentionally stricter at Gateway; backends retain second-layer limits for bypass/misrouting/internal-runaway protection.
+- unsupported write content type: 415;
+- TRACE/CONNECT: 405;
+- body/header limits: rejected before business processing.
