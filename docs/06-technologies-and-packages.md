@@ -33,10 +33,10 @@ Every new package must be added through central package management in `Directory
 | Package | `Microsoft.AspNetCore.Authentication.JwtBearer` |
 | Version | `8.0.29` |
 | License | MIT |
-| Owner project(s) | `FinWallet.Api`, with token creation support implemented behind Application contracts in Infrastructure |
-| Purpose | ASP.NET Core JWT bearer validation and authentication integration |
-| Why required | The Web API must validate signed bearer access tokens using the supported ASP.NET Core authentication stack without ASP.NET Core Identity. |
-| Alternatives considered | Hand-written JWT parsing/validation was rejected because implementing a security token standard manually adds unnecessary security risk. ASP.NET Core Identity was rejected by explicit project requirement. |
+| Owner project(s) | `FinWallet.Api`, `FinWallet.Infrastructure` |
+| Purpose | ASP.NET Core JWT bearer validation in the API and supported JWT token primitives used by the Infrastructure token issuer |
+| Why required | The Web API must validate signed bearer access tokens using the supported ASP.NET Core authentication stack without ASP.NET Core Identity, and Infrastructure must issue interoperable signed JWT access tokens without implementing the token standard manually. |
+| Alternatives considered | Hand-written JWT parsing/signing/validation was rejected because implementing a security token standard manually adds unnecessary security risk. ASP.NET Core Identity was rejected by explicit project requirement. |
 | Financial/security impact | Security-critical authentication dependency; version must remain on the supported .NET 8 patch line and be reviewed during dependency updates. |
 
 The package is Microsoft-maintained, open source and MIT licensed. Version `8.0.29` is the current .NET 8 patch available when this package decision was made in August 2026.
