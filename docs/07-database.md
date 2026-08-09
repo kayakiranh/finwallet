@@ -1,189 +1,271 @@
-# Database Design
+# Veritabanı Tasarımı / Database Design
 
-## Source-of-truth policy
+## Türkçe
 
-MSSQL is the durable source of truth for customer, authentication and financial state. Redis is not a replacement for MSSQL and is never sufficient to guarantee money correctness.
+### Source of truth
+MSSQL customer, authentication/session ve financial state için durable source of truth'tür. Redis MSSQL'nin alternatifi değildir ve para doğruluğunu tek başına garanti edemez.
 
-Persistence uses explicit parameterized `Microsoft.Data.SqlClient` commands rather than EF Core or a generic repository framework. Transaction boundaries and concurrency-sensitive SQL remain visible.
+Persistence explicit parameterized `Microsoft.Data.SqlClient` kullanır. Özellikle financial transaction/locking kodunda SQL transaction boundary görünür tutulur.
 
-## Authentication schema
+### Authentication schema
+`database/001_authentication_schema.sql`:
+- Customers;
+- CustomerCredentials;
+- CustomerSessions;
+- RefreshTokens.
 
-`database/001_authentication_schema.sql` defines Customers, CustomerCredentials, CustomerSessions and RefreshTokens. Raw passwords and raw refresh tokens are never stored.
+Raw password ve raw refresh token saklanmaz.
 
-## Financial account schema
+### Financial accounts schema
+`database/002_financial_accounts_schema.sql`:
+- Wallets;
+- BankAccounts.
 
-`database/002_financial_accounts_schema.sql` defines durable Wallets and BankAccounts.
-
-### Wallet invariants
-
-- one Wallet per `(CustomerId, Currency)`;
+Wallet invariant'ları:
+- `(CustomerId, Currency)` unique;
 - non-negative available/blocked balances;
-- ownership FK to Customer;
-- wallet lifecycle is durable;
-- balances use `DECIMAL(19,4)`.
+- customer ownership FK;
+- durable lifecycle;
+- `DECIMAL(19,4)` balance.
 
-### BankAccount invariants
+BankAccount invariant'ları:
+- wallet başına tek BankAccount;
+- internal ve provider AccountId ayrı;
+- wallet/customer/currency composite relationship;
+- provider account ID ve IBAN-like değer tutarlı;
+- lifecycle update'leri expected status + `UpdatedAt` compare-and-set kullanır.
 
-- one BankAccount per Wallet;
-- internal BankAccount ID and external provider Account ID remain separate;
-- composite FK `(WalletId, CustomerId, Currency) -> Wallets(Id, CustomerId, Currency)` prevents cross-owner/cross-currency links;
-- provider AccountId and IBAN-like value must be present together;
-- lifecycle changes use expected `Status + UpdatedAt` compare-and-set.
+### Ledger/transaction schema
+`database/003_ledger_transaction_schema.sql`:
+- LedgerAccounts;
+- FinancialTransactions;
+- IdempotencyRecords;
+- LedgerJournals;
+- LedgerEntries.
 
-External bank HTTP calls never run inside a FinWallet SQL transaction.
+**FinancialTransaction** business operation kaydıdır; Wallet row veya LedgerJournal ile aynı kavram değildir.
 
-## Ledger / financial transaction schema
-
-`database/003_ledger_transaction_schema.sql` introduces:
-
-- `LedgerAccounts`;
-- `FinancialTransactions`;
-- `IdempotencyRecords`;
-- `LedgerJournals`;
-- `LedgerEntries`.
-
-### FinancialTransactions
-
-A FinancialTransaction is the durable business-operation record; it is separate from HTTP requests, Wallet balance rows and LedgerJournal accounting rows.
-
-Stable type values:
-
+Stabil transaction type'ları:
 1. WalletTransfer
 2. BankDeposit
 3. BankWithdrawal
 4. Refund
 5. Reversal
 
-Stable lifecycle values:
-
+Lifecycle:
 1. Processing
 2. Completed
 3. Failed
 4. Reversed
 
-Audit timestamps are separated: `CreatedAt`, original `FinalizedAt`, and later optional `ReversedAt`. Reversal never overwrites the original finalization timestamp.
+### Financial decimal kuralı
+Financial amount `DECIMAL(19,4)` uyumlu olmalıdır:
+- maksimum 4 decimal place;
+- maksimum absolute amount `999999999999999.9999`.
 
-For WalletTransfer, the database requires non-null, distinct source/destination wallets. Source ownership/currency and destination currency are enforced with composite foreign keys.
+Application boundary DB overflow'a güvenmek yerine amount/balance kapasitesini SQL'e gitmeden önce doğrular.
 
-### Financial decimal rule
-
-`FinancialAmountRules` centralizes the `DECIMAL(19,4)` contract:
-
-- at most four decimal places;
-- maximum absolute amount `999999999999999.9999`.
-
-Transfer request amount and post-transfer balances are validated before SQL parameter execution so financial overflow/scale errors are not delegated to the database provider.
-
-### IdempotencyRecords
-
-Durable financial idempotency is keyed by:
-
+### Durable idempotency
+Identity:
 ```text
 Scope + CustomerId + IdempotencyKey
 ```
+Wallet-transfer scope: `WALLET_TRANSFER`.
 
-Wallet-transfer scope is `WALLET_TRANSFER`.
+Request fingerprint canonical source/destination/amount değerlerinden SHA-256 ile üretilir.
 
-The request fingerprint is SHA-256 over canonical:
+Davranış:
+- same key + same payload -> wait/replay aynı transaction;
+- same key + different payload -> conflict;
+- final authority MSSQL;
+- replay current wallet balance değil immutable transaction alanları döndürür.
 
-```text
-sourceWalletId:N | destinationWalletId:N | amount:G29
-```
+Posting store Serializable isolation altında idempotency range'i `UPDLOCK, HOLDLOCK` ile korur.
 
-Consequences:
-
-- same key + same canonical request waits for/replays the same financial result;
-- same key + different canonical request is an explicit conflict;
-- the database, not Redis, is final authority;
-- replay response uses immutable FinancialTransaction fields, not current wallet balances that may have changed after the original transfer.
-
-The posting store runs at Serializable isolation and looks up the unique idempotency row using `UPDLOCK, HOLDLOCK`. The missing-key range is therefore protected while the first request claims it. A concurrent duplicate waits and then observes the committed Completed record instead of applying money twice.
-
-A Processing row may contain the in-flight FinancialTransaction `ResourceId`. Synchronous wallet-transfer posting normally commits Processing -> Completed in the same SQL transaction; therefore a crash before COMMIT rolls the claim back with the financial state.
-
-### LedgerAccounts
-
-Wallet transfer uses stable ledger-account codes:
-
+### Wallet transfer accounting
+Wallet Liability ledger account code:
 ```text
 WALLET-LIABILITY:{walletId:N}
 ```
 
-These are Liability accounts in the Wallet currency. The atomic transfer store finds/creates them inside the same SQL transaction used for posting and verifies existing code/currency/type/status consistency.
-
-### Wallet transfer accounting
-
-A transfer changes two customer-liability accounts:
-
+Muhasebe:
 ```text
 Debit   source wallet liability       amount
 Credit  destination wallet liability  amount
 ```
+Bu pure internal liability reclassification'dır.
 
-Source liability decreases while destination liability increases. The journal contains no balancing plug/system account because this is a pure internal liability reclassification.
-
-### Atomic WalletTransfer posting
-
-`SqlWalletTransferPostingStore` owns the full synchronous posting transaction. It deliberately replaces the unsafe idea of independently committing a journal repository.
-
-Sequence:
-
+### Atomic posting — uygulanmış
+`SqlWalletTransferPostingStore` aynı MSSQL transaction içinde:
 ```text
-BEGIN TRANSACTION (SERIALIZABLE)
--> lock/claim idempotency key range
--> if Completed + same request: load immutable FinancialTransaction and replay
--> insert Processing idempotency claim
--> lock source/destination Wallet rows in deterministic GUID order
--> validate source ownership, wallet status, currency and balance
--> apply Wallet domain Debit/Credit in memory
--> validate post-transfer DECIMAL(19,4) capacity
--> find/create wallet Liability ledger accounts
+BEGIN SERIALIZABLE
+-> claim/replay idempotency
+-> wallet row locks (deterministic GUID order)
+-> validate ownership/status/currency/balance
+-> calculate domain debit/credit
+-> find/create ledger accounts
 -> insert Processing FinancialTransaction
--> create and Domain.Post balanced LedgerJournal
--> insert LedgerJournal + LedgerEntries
--> re-read SQL entry totals and verify Debit == Credit
--> update both Wallet balances
--> finalize FinancialTransaction as Completed
--> finalize IdempotencyRecord as Completed
+-> create/post LedgerJournal + entries
+-> SQL aggregate Debit/Credit validation
+-> update wallet balances
+-> finalize transaction
+-> finalize idempotency
 -> COMMIT
 ```
-
-Any exception before COMMIT causes the SQL transaction to roll back as one unit. There is no state where wallet money moved but ledger/idempotency did not, or vice versa.
-
-Wallet rows are locked in deterministic GUID order. This reduces deadlock risk for opposite-direction concurrent transfers such as A->B and B->A.
-
-Destination wallet must currently be Active for WalletTransfer. Source wallet must be Active and owned by the authenticated customer. Source/destination currencies must match.
+Her exception commit öncesi bütün finansal state'i rollback eder.
 
 ### Debit = Credit defense in depth
+Domain `LedgerJournal.Post(...)` balance kontrolü yapar. Persistence ayrıca inserted entry toplamlarını SQL aggregate ile kontrol eder. En az iki entry, positive totals ve exact equality sağlanmadan commit edilmez.
 
-The Domain `LedgerJournal.Post(...)` checks balance before persistence. After entry inserts, the posting store also performs an SQL aggregate check of persisted rows inside the same transaction. COMMIT is forbidden if:
+### Domain rehydration
+Persisted entity state reflection ile private setter zorlanarak değil, kontrollü `Restore` factory'leriyle materialize edilir.
 
-- fewer than two entries exist;
-- total Debit <= 0;
-- total Credit <= 0;
-- total Debit != total Credit.
+### Redis state
+Redis registration OTP gibi transient challenge state saklar. Wallet/Ledger/FinancialTransaction truth Redis'e taşınmaz.
 
-Composite foreign keys additionally prevent entry currency from differing from its Journal or LedgerAccount.
+### Güncel durum
+Public `POST /api/v1/transfers` endpoint'i **uygulanmıştır** ve yukarıdaki posting store'u Application fraud/session orchestration üzerinden kullanır. Önceki dokümandaki “public transfer endpoint yok” notu artık geçerli değildir.
 
-## Domain materialization
+### Kalan database işleri
+- BankDeposit/BankWithdrawal persistence workflow;
+- FraudEvents/manual review;
+- Outbox/Inbox;
+- ReconciliationRuns/ReconciliationIssues;
+- AuditEvents/operational logging store yaklaşımı;
+- integration/concurrency test fixtures.
 
-Infrastructure uses controlled factories rather than reflection where persisted private-set state must be rehydrated:
+---
 
-- Customer.Restore;
-- CustomerCredential.Restore;
-- CustomerSession.Restore;
-- RefreshToken.Restore;
-- Wallet.Restore;
-- BankAccount.Restore;
-- LedgerAccount.Restore;
-- FinancialTransaction.Restore.
+## English
 
-## Redis OTP state
+### Source of truth
+MSSQL is the durable source of truth for customer, authentication/session and financial state. Redis is not a replacement for MSSQL and cannot independently guarantee money correctness.
 
-Redis stores transient registration OTP challenge state only. It cannot activate a customer or establish financial truth by itself.
+Persistence uses explicit parameterized `Microsoft.Data.SqlClient`. SQL transaction boundaries remain visible, especially in financial locking code.
 
-## Remaining transfer work
+### Authentication schema
+`database/001_authentication_schema.sql`:
+- Customers;
+- CustomerCredentials;
+- CustomerSessions;
+- RefreshTokens.
 
-The atomic posting store is implemented but no public transfer endpoint is exposed yet. Before exposing it, the Application transfer handler will add server-derived fraud/velocity/device/beneficiary signals and combine internal FraudEngine + external FakeFraud decisions outside the financial SQL transaction.
+Raw passwords and raw refresh tokens are never stored.
 
-Later phases still need Outbox/Inbox, FraudEvents, Merchants, ReconciliationRuns/ReconciliationIssues and AuditEvents.
+### Financial accounts schema
+`database/002_financial_accounts_schema.sql`:
+- Wallets;
+- BankAccounts.
+
+Wallet invariants:
+- unique `(CustomerId, Currency)`;
+- non-negative available/blocked balances;
+- customer ownership FK;
+- durable lifecycle;
+- `DECIMAL(19,4)` balance.
+
+BankAccount invariants:
+- one BankAccount per Wallet;
+- internal and provider AccountId remain separate;
+- composite wallet/customer/currency relationship;
+- provider account ID and IBAN-like value remain consistent;
+- lifecycle updates use expected status + `UpdatedAt` compare-and-set.
+
+### Ledger/transaction schema
+`database/003_ledger_transaction_schema.sql` defines:
+- LedgerAccounts;
+- FinancialTransactions;
+- IdempotencyRecords;
+- LedgerJournals;
+- LedgerEntries.
+
+A **FinancialTransaction** is the durable business-operation record; it is not the same concept as a Wallet row or LedgerJournal.
+
+Stable transaction types:
+1. WalletTransfer
+2. BankDeposit
+3. BankWithdrawal
+4. Refund
+5. Reversal
+
+Lifecycle:
+1. Processing
+2. Completed
+3. Failed
+4. Reversed
+
+### Financial decimal rule
+Financial amounts must fit `DECIMAL(19,4)`:
+- maximum four decimal places;
+- maximum absolute amount `999999999999999.9999`.
+
+Application boundaries validate amount/balance capacity before SQL rather than relying on database overflow errors.
+
+### Durable idempotency
+Identity:
+```text
+Scope + CustomerId + IdempotencyKey
+```
+Wallet-transfer scope: `WALLET_TRANSFER`.
+
+The request fingerprint is SHA-256 over canonical source/destination/amount values.
+
+Behavior:
+- same key + same payload -> wait/replay the same transaction;
+- same key + different payload -> conflict;
+- MSSQL is final authority;
+- replay returns immutable transaction fields, not current wallet balances.
+
+The posting store uses Serializable isolation with `UPDLOCK, HOLDLOCK` for the idempotency key range.
+
+### Wallet-transfer accounting
+Wallet Liability ledger account code:
+```text
+WALLET-LIABILITY:{walletId:N}
+```
+
+Accounting:
+```text
+Debit   source wallet liability       amount
+Credit  destination wallet liability  amount
+```
+This is a pure internal liability reclassification.
+
+### Atomic posting — implemented
+`SqlWalletTransferPostingStore` performs in one MSSQL transaction:
+```text
+BEGIN SERIALIZABLE
+-> claim/replay idempotency
+-> wallet row locks (deterministic GUID order)
+-> validate ownership/status/currency/balance
+-> calculate domain debit/credit
+-> find/create ledger accounts
+-> insert Processing FinancialTransaction
+-> create/post LedgerJournal + entries
+-> SQL aggregate Debit/Credit validation
+-> update wallet balances
+-> finalize transaction
+-> finalize idempotency
+-> COMMIT
+```
+Any exception before commit rolls back the complete financial state.
+
+### Debit = Credit defense in depth
+Domain `LedgerJournal.Post(...)` validates balance. Persistence also aggregates inserted entries in SQL. Commit is forbidden unless there are at least two entries, positive totals and exact Debit/Credit equality.
+
+### Domain rehydration
+Persisted entity state is materialized through controlled `Restore` factories rather than reflection-based mutation of private setters.
+
+### Redis state
+Redis stores transient challenge state such as registration OTP. Wallet/Ledger/FinancialTransaction truth never moves to Redis.
+
+### Current status
+Public `POST /api/v1/transfers` is **implemented** and uses the posting store through Application fraud/session orchestration. The previous documentation statement that no public transfer endpoint existed is obsolete and has been removed.
+
+### Remaining database work
+- BankDeposit/BankWithdrawal persistence workflow;
+- FraudEvents/manual review;
+- Outbox/Inbox;
+- ReconciliationRuns/ReconciliationIssues;
+- AuditEvents/operational logging storage approach;
+- integration/concurrency test fixtures.
