@@ -8,29 +8,58 @@ Main FinWallet endpoints use `/api/v1`.
 
 ### Correlation
 
-Clients may supply `X-Correlation-Id`. The API layer will validate or create a correlation identifier and propagate it to external provider calls. Correlation IDs are not transaction IDs and must not contain PII.
+Clients may supply `X-Correlation-Id`. Values are accepted only when they are at most 128 characters and contain safe ASCII identifier characters. Invalid/missing values are replaced with a generated identifier. The API returns the effective value in the response header, uses it as the ASP.NET `TraceIdentifier`, and propagates it to external provider calls.
+
+Correlation IDs are not transaction IDs and must not contain PII, tokens, account numbers or other sensitive data.
 
 ### Authentication
 
 Protected endpoints use `Authorization: Bearer <access-token>`.
 
-JWT access tokens are short lived. Raw access tokens and refresh tokens must never be written to logs.
+JWT access tokens are short lived, issuer/audience/signature/lifetime are validated, and accepted algorithms are restricted to the fixed FinWallet signing algorithm. Raw access tokens and refresh tokens must never be written to logs.
 
 ### Idempotency
 
-All future money-changing endpoints require `Idempotency-Key`. Registration/login endpoints do not use the financial idempotency mechanism; registration uniqueness is protected by normalized phone uniqueness and OTP verification.
+All future money-changing endpoints require `Idempotency-Key`. Registration/login endpoints do not use the financial idempotency mechanism. Registration uniqueness is durably protected by the normalized-phone MSSQL unique constraint and OTP verification is single-use in Redis.
 
 ### Error format
 
-API errors will use Problem Details with a stable application error code. Client applications must branch on the error code/status rather than parsing human-readable messages.
+Expected API errors use Problem Details with a stable `code` extension and `traceId`. Client applications must branch on HTTP status + error code rather than parsing human-readable text.
+
+Examples include:
+
+- `REGISTRATION_NOT_ALLOWED`
+- `REGISTRATION_CONFLICT`
+- `OTP_RESEND_RATE_LIMIT`
+- `INVALID_REGISTRATION_OTP`
+- `INVALID_CREDENTIALS`
+- `AUTH_TEMPORARILY_LOCKED`
+- `INVALID_REFRESH_TOKEN`
+- `REFRESH_TOKEN_REUSE_DETECTED`
+
+Unexpected exceptions return a generic `UNEXPECTED_ERROR` without internal exception details.
+
+## Runtime configuration
+
+Authentication persistence intentionally has no in-memory production fallback. The API requires the following configuration values at startup. Environment variables can use ASP.NET Core's `__` separator.
+
+| Configuration key | Environment variable example | Purpose |
+|---|---|---|
+| `FinWallet:Sql:ConnectionString` | `FinWallet__Sql__ConnectionString` | MSSQL durable source of customer/auth state |
+| `FinWallet:Redis:ConnectionString` | `FinWallet__Redis__ConnectionString` | Redis registration OTP state |
+| `FinWallet:Security:RegistrationOtpPepper` | `FinWallet__Security__RegistrationOtpPepper` | HMAC secret; minimum 32 UTF-8 bytes |
+| `FinWallet:Security:Jwt:Issuer` | `FinWallet__Security__Jwt__Issuer` | JWT issuer |
+| `FinWallet:Security:Jwt:Audience` | `FinWallet__Security__Jwt__Audience` | JWT audience |
+| `FinWallet:Security:Jwt:SigningKey` | `FinWallet__Security__Jwt__SigningKey` | JWT signing secret; minimum 32 UTF-8 bytes |
+| `FinWallet:Integrations:FakeCommunication:BaseUrl` | `FinWallet__Integrations__FakeCommunication__BaseUrl` | FakeCommunication API base URL |
+
+Secrets must come from the deployment secret mechanism/environment and must not be committed to source control.
 
 ## Authentication and registration endpoints
 
-The contracts below are the Phase 2 target API surface. Routes are connected only after the durable MSSQL/Redis implementations are available; no in-memory production substitute is used.
-
 ### POST `/api/v1/auth/register`
 
-Creates a pending customer registration and sends a verification OTP through FakeCommunication.
+Creates a durable PendingVerification customer and attempts to send the initial verification OTP through FakeCommunication.
 
 Request:
 
@@ -46,29 +75,60 @@ Request:
 Processing rules:
 
 - Supported registration countries are explicitly allow-listed.
-- Phase 2 baseline supports `TR/+90` and `AZ/+994`.
-- Country selection and phone calling code must match.
-- Phone is normalized before uniqueness lookup.
+- Baseline supports `TR/+90` and `AZ/+994`.
+- Country selection and phone calling code/length must match.
+- Phone is normalized before lookup and also protected by a MSSQL unique constraint.
 - Password must satisfy the fixed server-side password policy.
-- Password is converted to PBKDF2 hash material and the raw password is never persisted.
-- Customer and CustomerCredential are persisted atomically in PendingVerification state.
-- OTP issuance/SMS occurs after the durable DB transaction has completed.
-- A communication-provider failure leaves the customer PendingVerification and is recoverable through OTP resend rather than rolling back durable customer identity.
+- Raw password is never persisted.
+- Customer + CustomerCredential are committed atomically in MSSQL.
+- OTP is created after the MSSQL transaction completes.
+- Redis stores only a customer-bound HMAC-SHA256 digest, never the raw OTP.
+- SMS delivery occurs outside the MSSQL transaction.
+- FakeCommunication failure does **not** roll back the durable customer identity.
 
-Successful response (planned `202 Accepted`):
+Successful response: `202 Accepted`
 
 ```json
 {
   "customerId": "d80b3773-ae17-4ca4-87e0-dca42d40ad6a",
-  "otpExpiresAt": "2026-08-09T13:40:00Z"
+  "otpExpiresAt": "2026-08-09T13:40:00Z",
+  "otpDeliverySucceeded": true
 }
 ```
 
-The OTP itself is never returned by FinWallet.
+When `otpDeliverySucceeded=false`, the registration still exists and the client can use the resend endpoint. The OTP itself is never returned by FinWallet.
 
-### POST `/api/v1/auth/register/verify`
+### POST `/api/v1/auth/registration/resend-otp`
 
-Verifies and consumes the SMS OTP and activates a PendingVerification customer.
+Issues a new OTP for a customer that is still PendingVerification and attempts SMS delivery again.
+
+Request:
+
+```json
+{
+  "customerId": "d80b3773-ae17-4ca4-87e0-dca42d40ad6a"
+}
+```
+
+Successful response: `200 OK`
+
+```json
+{
+  "otpExpiresAt": "2026-08-09T13:45:00Z",
+  "otpDeliverySucceeded": true
+}
+```
+
+Rules:
+
+- A fixed resend cooldown is enforced in Redis.
+- Creating a new challenge replaces the previous active OTP after cooldown.
+- Unknown/non-pending customers use the same generic verification failure behavior.
+- Provider failure returns `otpDeliverySucceeded=false` without changing durable customer state.
+
+### POST `/api/v1/auth/registration/verify`
+
+Verifies and atomically consumes the SMS OTP, then activates a PendingVerification customer.
 
 Request:
 
@@ -79,9 +139,13 @@ Request:
 }
 ```
 
+Successful response: `204 No Content`
+
 Rules:
 
-- OTP verification/consumption must be atomic in the OTP store.
+- OTP comparison, failed-attempt increment and successful deletion happen atomically in Redis Lua.
+- Maximum failed attempts are fixed by security policy.
+- A consumed OTP cannot be replayed.
 - A successful repeated verification after the customer is already Active is treated idempotently.
 - Incorrect/expired/consumed OTPs return the same generic verification error.
 
@@ -99,7 +163,7 @@ Request:
 }
 ```
 
-Successful response (planned `200 OK`):
+Successful response: `200 OK`
 
 ```json
 {
@@ -118,6 +182,7 @@ Rules:
 - Missing-user requests still perform expensive password work to reduce coarse enumeration timing differences.
 - Five consecutive failures trigger a fixed temporary credential lock.
 - Successful login resets failed-login state and atomically persists the session plus initial refresh-token hash.
+- Raw refresh token is returned once to the client; MSSQL stores only its SHA-256 lookup hash.
 - Access token lifetime is fixed at ten minutes.
 - Session absolute lifetime is fixed at thirty days.
 - Individual refresh tokens have a maximum fourteen-day lifetime and never outlive the session.
@@ -134,21 +199,24 @@ Request:
 }
 ```
 
+Successful response has the same token shape as login.
+
 Rules:
 
 - Raw refresh tokens are never persisted.
 - Server lookup uses a deterministic SHA-256 hash of the opaque token.
-- The current refresh token is consumed and replaced atomically.
-- Reuse of a previously consumed refresh token revokes the associated session and remaining refresh tokens.
+- MSSQL rotation uses compare-and-set semantics (`ConsumedAt IS NULL AND RevokedAt IS NULL`).
+- Concurrent rotation attempts therefore have one durable winner.
+- The losing/reused token path revokes the session and remaining refresh-token family.
 - Expired/revoked/unknown tokens return a generic invalid-refresh response.
 
 ### POST `/api/v1/auth/logout`
 
-Planned Phase 2/3 endpoint that revokes the current session and all refresh tokens associated with it. Existing access JWTs remain short-lived; protected endpoint authorization will additionally be able to consult session revocation state where the operation requires it.
+Planned endpoint that will revoke the current session and all refresh tokens associated with it. Existing access JWTs remain short-lived; higher-risk protected endpoints can additionally validate session state when needed.
 
 ## Financial endpoint conventions
 
-Financial endpoint details are added in Phase 6. All money-changing operations will require:
+Financial endpoint details are added in later phases. All money-changing operations will require:
 
 - authenticated active customer/session;
 - `Idempotency-Key`;
