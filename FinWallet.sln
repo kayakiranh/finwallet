@@ -10,6 +10,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FinWallet.Infrastructure", 
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FinWallet.Api", "src\FinWallet.Api\FinWallet.Api.csproj", "{6380098F-4ED6-41A4-AE51-3B6E797BBC9A}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FinWallet.Shared.Contracts", "src\FinWallet.Shared.Contracts\FinWallet.Shared.Contracts.csproj", "{C903E099-16D8-45D1-9D19-F7F1E2CD9A44}"
+EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FakeBank.Api", "simulators\FakeBank.Api\FakeBank.Api.csproj", "{800D7658-A133-48B4-B17B-9C21415160F9}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FakeFraud.Api", "simulators\FakeFraud.Api\FakeFraud.Api.csproj", "{5D0B00DA-BFF4-4335-A113-7BC5B905C7A4}"
@@ -42,6 +44,10 @@ Global
 		{6380098F-4ED6-41A4-AE51-3B6E797BBC9A}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{6380098F-4ED6-41A4-AE51-3B6E797BBC9A}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{6380098F-4ED6-41A4-AE51-3B6E797BBC9A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C903E099-16D8-45D1-9D19-F7F1E2CD9A44}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C903E099-16D8-45D1-9D19-F7F1E2CD9A44}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C903E099-16D8-45D1-9D19-F7F1E2CD9A44}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C903E099-16D8-45D1-9D19-F7F1E2CD9A44}.Release|Any CPU.Build.0 = Release|Any CPU
 		{800D7658-A133-48B4-B17B-9C21415160F9}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{800D7658-A133-48B4-B17B-9C21415160F9}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{800D7658-A133-48B4-B17B-9C21415160F9}.Release|Any CPU.ActiveCfg = Release|Any CPU

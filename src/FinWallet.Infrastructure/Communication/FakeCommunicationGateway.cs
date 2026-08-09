@@ -25,8 +25,8 @@ public sealed class FakeCommunicationGateway : ICommunicationGateway
     }
 
     /// <summary>
-    /// TR: Registration OTP'sini provider'a özel DTO'ya çevirir, correlation header'ını taşır ve FakeCommunication SMS endpoint'ine gönderir.
-    /// EN: Converts a registration OTP into the provider-specific DTO, propagates the correlation header and sends it to the FakeCommunication SMS endpoint.
+    /// TR: Registration OTP'sini provider'a özel DTO'ya çevirir, correlation header'ını taşır ve controller tabanlı FakeCommunication SMS endpoint'ine gönderir.
+    /// EN: Converts a registration OTP into the provider-specific DTO, propagates the correlation header and sends it to the controller-based FakeCommunication SMS endpoint.
     /// </summary>
     /// <param name="normalizedPhoneNumber">
     /// TR: SMS'in gönderileceği normalize uluslararası telefon numarası.
@@ -64,7 +64,7 @@ public sealed class FakeCommunicationGateway : ICommunicationGateway
             $"FinWallet verification code: {otpCode}",
             correlationId);
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, "api/v1/sms")
+        using var request = new HttpRequestMessage(HttpMethod.Post, "api/v1/communication/sms")
         {
             Content = JsonContent.Create(providerRequest)
         };
