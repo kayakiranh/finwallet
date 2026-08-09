@@ -1,9 +1,9 @@
 name: Generate PDF documentation
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/pdf-documentation
+      - main
     paths:
       - 'docs/**/*.md'
       - 'scripts/generate_docs_pdf.py'
@@ -14,11 +14,13 @@ permissions:
 
 jobs:
   generate-pdf-documentation:
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout pull request branch
         uses: actions/checkout@v6
         with:
+          ref: ${{ github.head_ref }}
           fetch-depth: 0
 
       - name: Setup Python
@@ -41,8 +43,10 @@ jobs:
           test -s docs/pdf/TR_FinWallet_Tum_Dokumanlar.pdf
           test -s docs/pdf/EN_FinWallet_All_Documents.pdf
 
-      - name: Commit generated PDFs
+      - name: Commit generated PDFs to pull request branch
         shell: bash
+        env:
+          HEAD_REF: ${{ github.head_ref }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -53,4 +57,4 @@ jobs:
             exit 0
           fi
           git commit -m "docs: generate bilingual PDF documentation"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+          git push origin "HEAD:${HEAD_REF}"
