@@ -1,13 +1,12 @@
-# FinWallet Delivery Roadmap
+# Proje Yönetimi ve Teslimat Yol Haritası / Project Management and Delivery Roadmap
 
-## Purpose
+## Türkçe
 
-This document defines how the repository is managed as a software-team backlog. GitHub issues are the authoritative work items; implementation happens on `agent/*` branches and is integrated through pull requests.
+### Amaç
+GitHub issue'ları authoritative work item'dır. Uygulama `agent/*` branch'lerinde geliştirilir ve PR ile `main`'e alınır.
 
-## Board model
-
-The intended GitHub Project columns are:
-
+### Board modeli
+Önerilen kolonlar:
 1. Backlog
 2. Ready
 3. In Progress
@@ -15,91 +14,144 @@ The intended GitHub Project columns are:
 5. Blocked
 6. Done
 
-Until a GitHub Project board is attached, equivalent `status:*` labels are used on issues so the backlog can be migrated without changing issue semantics.
+Project board yoksa eşdeğer `status:*` label kullanılabilir.
 
-## Milestone plan
-
-| Milestone | Scope | Primary agent |
+### Milestone'lar
+| Milestone | Kapsam | Güncel durum |
 |---|---|---|
-| M0 — Architecture Baseline | Architecture, contracts, DB/security design and governance docs | Solution Architect |
-| M1 — Foundation | Solution structure, customer/wallet primitives and documentation rules | Foundation / Financial Domain |
-| M2 — Identity & Registration | Country/phone registration policy, OTP, password security, JWT, refresh/session lifecycle | Security/Auth |
-| M3 — Persistence & Concurrency | MSSQL, Redis, durable idempotency, outbox/inbox and concurrency controls | Persistence/Concurrency |
-| M4 — Financial Core | Double-entry ledger, transaction state machine, reversal and accounting rules | Financial Domain |
-| M5 — External Providers | Bank, Fraud, Cutoff, Campaign and Communication simulators plus adapters | Integration |
-| M6 — Financial Flows | Deposit, withdrawal, wallet transfer, purchase, campaign accounting, refund/reversal | Financial Domain + Integration |
-| M7 — Reconciliation & Hardening | Reconciliation, structured masked logging, chaos/concurrency/security testing | QA/Chaos + Review |
+| M0 Architecture Baseline | scope, architecture, security, docs | Büyük ölçüde tamamlandı |
+| M1 Foundation | solution/domain foundations | Tamamlandı |
+| M2 Identity & Registration | OTP, password, JWT, refresh/session | Ana akış tamamlandı; logout açık |
+| M3 Persistence & Concurrency | MSSQL, Redis, idempotency | Transfer için ana temel tamamlandı; outbox/inbox açık |
+| M4 Financial Core | ledger, transaction, reversal model | Ledger + transfer tamamlandı; public reversal/refund açık |
+| M5 External Providers | FakeBank/Fraud/Cutoff/Campaign/Communication | Simulator baseline tamamlandı |
+| M6 Financial Flows | deposit, withdrawal, transfer, purchase, refund | Wallet transfer tamamlandı; diğerleri açık |
+| M7 Reconciliation & Hardening | reconciliation, observability, chaos/integration tests | Açık |
+| M8 Gateway/Platform | YARP, Swagger, rate-limit, security baseline | Tamamlandı |
 
-## Current epics
+### Güncel tamamlanan ana çalışmalar
+- registration/auth/session baseline;
+- Wallet/BankAccount persistence;
+- Fake provider APIs;
+- double-entry ledger schema/domain;
+- durable idempotent wallet transfer;
+- fraud orchestration;
+- YARP Gateway + downstream trust boundary;
+- Swagger tüm Web API'lerde;
+- appsettings-based platform/performance tuning;
+- xUnit v3 + Moq başlangıç test projesi;
+- Release build + test CI;
+- çift dilli dokümantasyon standardı.
 
-- Phase 0 issues: architecture, integrations, persistence design, security design and documentation governance.
-- Phase 1: foundation and wallet domain — completed by PR #7.
-- Phase 2: registration, authentication and session security — Issue #8, current implementation phase.
-- Phase 3: MSSQL, Redis, idempotency and persistence — Issue #9.
-- Phase 4: double-entry ledger and transaction engine — Issue #10.
-- Phase 5: fake provider APIs and resilience contracts — Issue #11.
+### Açık öncelikler
+1. BankDeposit.
+2. BankWithdrawal + cutoff.
+3. Real MSSQL/Redis/YARP integration/concurrency tests.
+4. Outbox/Inbox + reliable notification.
+5. Durable FraudEvents/manual review.
+6. Transaction history/read model.
+7. Refund/Reversal public flows.
+8. Reconciliation.
+9. Centralized masked logging/OpenTelemetry/alerting.
+10. Production deployment hardening.
 
-## Team roles
+### Roller
+- Solution Architect: boundaries/ADR/dependency direction.
+- Security/Auth: auth/session/OTP/token controls.
+- Financial Domain: wallet/ledger/transaction/accounting.
+- Persistence/Concurrency: SQL/Redis/idempotency/locking.
+- Integration: provider adapters/resilience/contracts.
+- QA/Chaos: concurrency/duplication/failure scenarios.
+- Code Review: architecture/security/financial correctness.
+- Documentation: TR+EN docs ve code-doc sync.
 
-### Solution Architect
-Owns architectural boundaries, ADRs, dependency direction and cross-cutting design decisions.
+### PR workflow
+1. Issue/acceptance criteria belirlenir.
+2. Current `main`'den bounded branch açılır.
+3. Kod + test + docs aynı feature scope içinde güncellenir.
+4. Release build/test yapılır.
+5. Draft PR açılır.
+6. Review/CI bulguları kapatılır.
+7. DoD sağlanınca merge edilir.
 
-### Security/Auth Agent
-Owns registration, password security, JWT, refresh token/session lifecycle, OTP and authentication threat controls.
+### DoD
+Code, test, TR/EN XML docs, affected TR/EN Markdown docs, security impact, failure behavior, concurrency/idempotency ve package inventory tamamlanmadan issue Done olmaz.
 
-### Financial Domain Agent
-Owns wallet invariants, ledger correctness, transaction state, reversal and accounting behavior.
+---
 
-### Persistence/Concurrency Agent
-Owns MSSQL/Redis persistence, transaction boundaries, atomic updates, idempotency, outbox/inbox and concurrency guarantees.
+## English
 
-### Integration Agent
-Owns external simulator contracts, adapters, anti-corruption mappings, correlation, timeout/retry/circuit-breaker behavior and callbacks.
+### Purpose
+GitHub issues are authoritative work items. Implementation occurs on `agent/*` branches and is integrated into `main` through pull requests.
 
-### QA/Chaos Agent
-Attempts to break financial correctness through concurrency, duplication, provider failure, timeout, corrupted workflow and reconciliation scenarios.
+### Board model
+Recommended columns:
+1. Backlog
+2. Ready
+3. In Progress
+4. In Review
+5. Blocked
+6. Done
 
-### Code Review Agent
-Reviews architecture, security, financial correctness, data consistency, package policy, XML documentation and over-engineering.
+Equivalent `status:*` labels may be used until a Project board is attached.
 
-### Documentation Agent
-Keeps technical analysis, architecture, APIs, packages, security, database, financial flows and operating procedures synchronized with code.
+### Milestones
+| Milestone | Scope | Current status |
+|---|---|---|
+| M0 Architecture Baseline | scope, architecture, security, docs | Largely complete |
+| M1 Foundation | solution/domain foundations | Complete |
+| M2 Identity & Registration | OTP, password, JWT, refresh/session | Main flow complete; logout open |
+| M3 Persistence & Concurrency | MSSQL, Redis, idempotency | Core transfer baseline complete; outbox/inbox open |
+| M4 Financial Core | ledger, transaction, reversal model | Ledger + transfer complete; public reversal/refund open |
+| M5 External Providers | FakeBank/Fraud/Cutoff/Campaign/Communication | Simulator baseline complete |
+| M6 Financial Flows | deposit, withdrawal, transfer, purchase, refund | Wallet transfer complete; others open |
+| M7 Reconciliation & Hardening | reconciliation, observability, chaos/integration tests | Open |
+| M8 Gateway/Platform | YARP, Swagger, rate limit, security baseline | Complete |
 
-## Pull request workflow
+### Major completed work
+- registration/auth/session baseline;
+- Wallet/BankAccount persistence;
+- Fake provider APIs;
+- double-entry ledger schema/domain;
+- durable idempotent wallet transfer;
+- fraud orchestration;
+- YARP Gateway + downstream trust boundary;
+- Swagger across all Web APIs;
+- appsettings-based platform/performance tuning;
+- initial xUnit v3 + Moq test project;
+- Release build + test CI;
+- bilingual documentation standard.
 
-1. Epic/feature issue exists before implementation.
-2. Agent branch is created from current `main`.
-3. Changes are committed in small cohesive commits.
-4. Documentation and tests are part of the same feature scope.
-5. Draft PR is opened early enough for review visibility.
-6. Review findings are corrected through additional small commits.
-7. PR is merged only when Definition of Done is met.
-8. The linked issue moves to Done/closed.
+### Open priorities
+1. BankDeposit.
+2. BankWithdrawal + cutoff.
+3. Real MSSQL/Redis/YARP integration/concurrency tests.
+4. Outbox/Inbox + reliable notification.
+5. Durable FraudEvents/manual review.
+6. Transaction history/read model.
+7. Public Refund/Reversal flows.
+8. Reconciliation.
+9. Centralized masked logging/OpenTelemetry/alerting.
+10. Production deployment hardening.
 
-## Commit policy
+### Roles
+- Solution Architect: boundaries/ADR/dependency direction.
+- Security/Auth: auth/session/OTP/token controls.
+- Financial Domain: wallet/ledger/transaction/accounting.
+- Persistence/Concurrency: SQL/Redis/idempotency/locking.
+- Integration: provider adapters/resilience/contracts.
+- QA/Chaos: concurrency/duplication/failure scenarios.
+- Code Review: architecture/security/financial correctness.
+- Documentation: TR+EN docs and code-doc synchronization.
 
-A commit should normally represent one understandable change such as one domain concept, one application contract, one persistence capability, one endpoint, one test group, or one documentation update. Large mixed commits are rejected during review.
+### Pull-request workflow
+1. Define issue/acceptance criteria.
+2. Create a bounded branch from current `main`.
+3. Update code + tests + docs within the same feature scope.
+4. Run Release build/tests.
+5. Open a draft PR.
+6. Resolve review/CI findings.
+7. Merge after DoD is satisfied.
 
-## Status labels
-
-- `status:backlog`
-- `status:ready`
-- `status:in-progress`
-- `status:review`
-- `status:blocked`
-- `status:done`
-
-## Agent labels
-
-- `agent:architecture`
-- `agent:security-auth`
-- `agent:financial-domain`
-- `agent:persistence`
-- `agent:integrations`
-- `agent:qa-chaos`
-- `agent:review`
-- `agent:documentation`
-
-## Definition of Done
-
-A work item is complete only when code, TR/EN XML documentation, relevant tests, API/architecture/package documentation, security implications and failure behavior are all addressed. Financial features additionally require explicit concurrency, idempotency and reconciliation consideration.
+### DoD
+An issue is not Done until code, tests, TR/EN XML docs, affected TR/EN Markdown docs, security impact, failure behavior, concurrency/idempotency considerations and package inventory are complete.
