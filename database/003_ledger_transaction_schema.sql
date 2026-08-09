@@ -117,7 +117,7 @@ CREATE TABLE dbo.IdempotencyRecords
     CONSTRAINT CK_IdempotencyRecords_UpdatedAt CHECK (UpdatedAt >= CreatedAt),
     CONSTRAINT CK_IdempotencyRecords_Completion CHECK
     (
-        (Status = 1 AND ResourceId IS NULL AND ResultCode IS NULL)
+        (Status = 1 AND ResultCode IS NULL)
         OR
         (Status IN (2, 3) AND ResultCode IS NOT NULL)
     )
