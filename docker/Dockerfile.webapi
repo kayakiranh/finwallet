@@ -21,12 +21,14 @@ COPY simulators/FakeCutoff.Api/*.csproj simulators/FakeCutoff.Api/
 COPY simulators/FakeCampaign.Api/*.csproj simulators/FakeCampaign.Api/
 COPY simulators/FakeCommunication.Api/*.csproj simulators/FakeCommunication.Api/
 
-RUN --mount=type=cache,id=finwallet-nuget,target=/root/.nuget/packages \
+# Multiple Compose images can build in parallel. sharing=locked prevents concurrent
+# NuGet writers from corrupting the shared BuildKit package cache.
+RUN --mount=type=cache,id=finwallet-nuget,target=/root/.nuget/packages,sharing=locked \
     dotnet restore "${PROJECT_FILE}"
 
 COPY . .
 
-RUN --mount=type=cache,id=finwallet-nuget,target=/root/.nuget/packages \
+RUN --mount=type=cache,id=finwallet-nuget,target=/root/.nuget/packages,sharing=locked \
     dotnet publish "${PROJECT_FILE}" \
       --configuration "${BUILD_CONFIGURATION}" \
       --output /app/publish \
