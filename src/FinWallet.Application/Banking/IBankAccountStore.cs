@@ -29,12 +29,13 @@ public interface IBankAccountStore
     Task<BankAccount?> FindByWalletAsync(Guid walletId, Guid customerId, CancellationToken cancellationToken);
 
     /// <summary>
-    /// TR: Yeni Opening BankAccount kaydını durable store'a ekler.
-    /// EN: Inserts a new Opening BankAccount record into the durable store.
+    /// TR: Yeni Opening BankAccount kaydını eklemeyi dener; aynı Wallet için concurrent create yarışını exception yerine false sonucu ile bildirir.
+    /// EN: Attempts to insert a new Opening BankAccount and reports a concurrent same-Wallet create race as false instead of exposing a unique-constraint exception.
     /// </summary>
     /// <param name="bankAccount">TR: Eklenecek BankAccount aggregate'i. EN: BankAccount aggregate to insert.</param>
     /// <param name="cancellationToken">TR: SQL insert iptal sinyali. EN: SQL-insert cancellation signal.</param>
-    Task InsertAsync(BankAccount bankAccount, CancellationToken cancellationToken);
+    /// <returns>TR: Insert başarılıysa true; aynı Wallet için başka kayıt yarışı kazandıysa false döndürür. EN: Returns true when inserted; false when another record won the same-Wallet race.</returns>
+    Task<bool> TryInsertAsync(BankAccount bankAccount, CancellationToken cancellationToken);
 
     /// <summary>
     /// TR: BankAccount lifecycle/provider state'ini beklenen mevcut status koşuluyla compare-and-set biçiminde günceller.
