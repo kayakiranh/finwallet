@@ -1,8 +1,8 @@
 namespace FinWallet.Application.Registration;
 
 /// <summary>
-/// TR: Kayıt talebinin kalıcı pending customer oluşturduğunu ve SMS doğrulamasının hangi zamana kadar tamamlanması gerektiğini istemci katmanına taşır.
-/// EN: Carries the fact that registration created a persistent pending customer and the deadline by which SMS verification must be completed.
+/// TR: Kayıt talebinin kalıcı pending customer oluşturduğunu, SMS doğrulama süresini ve ilk OTP gönderiminin provider tarafından başarılı kabul edilip edilmediğini istemci katmanına taşır.
+/// EN: Carries the fact that registration created a persistent pending customer, the SMS-verification deadline and whether the initial OTP delivery was accepted successfully by the provider.
 /// </summary>
 public sealed class RegisterCustomerResult
 {
@@ -10,18 +10,17 @@ public sealed class RegisterCustomerResult
     /// TR: Kayıt sonucunu oluşturur.
     /// EN: Creates the registration result.
     /// </summary>
-    /// <param name="customerId">
-    /// TR: SMS doğrulaması bekleyen yeni müşterinin kimliği.
-    /// EN: Identifier of the new customer awaiting SMS verification.
-    /// </param>
-    /// <param name="otpExpiresAt">
-    /// TR: SMS OTP doğrulamasının sona ereceği UTC zaman bilgisi.
-    /// EN: UTC timestamp at which the SMS OTP challenge expires.
-    /// </param>
-    public RegisterCustomerResult(Guid customerId, DateTimeOffset otpExpiresAt)
+    /// <param name="customerId">TR: SMS doğrulaması bekleyen yeni müşteri kimliği. EN: Identifier of the new customer awaiting SMS verification.</param>
+    /// <param name="otpExpiresAt">TR: SMS OTP challenge sona erme UTC zamanı. EN: UTC timestamp at which the SMS OTP challenge expires.</param>
+    /// <param name="otpDeliverySucceeded">TR: FakeCommunication SMS çağrısı başarıyla kabul edildiyse true. EN: True when the FakeCommunication SMS call was accepted successfully.</param>
+    public RegisterCustomerResult(
+        Guid customerId,
+        DateTimeOffset otpExpiresAt,
+        bool otpDeliverySucceeded)
     {
         CustomerId = customerId;
         OtpExpiresAt = otpExpiresAt;
+        OtpDeliverySucceeded = otpDeliverySucceeded;
     }
 
     /// <summary>
@@ -35,4 +34,10 @@ public sealed class RegisterCustomerResult
     /// EN: Gets the UTC expiration time of the OTP challenge.
     /// </summary>
     public DateTimeOffset OtpExpiresAt { get; }
+
+    /// <summary>
+    /// TR: İlk OTP SMS gönderiminin provider tarafından başarılı kabul edilip edilmediğini döndürür; false ise istemci resend akışını kullanabilir.
+    /// EN: Gets whether the initial OTP SMS delivery was accepted successfully by the provider; when false, the client may use the resend flow.
+    /// </summary>
+    public bool OtpDeliverySucceeded { get; }
 }
