@@ -47,12 +47,12 @@ def register_fonts() -> None:
 
 def source_documents() -> list[Path]:
     result: list[Path] = []
-    for path in DOCS.glob("[0-1][0-9]-*.md"):
+    for path in DOCS.glob("[0-2][0-9]-*.md"):
         try:
             number = int(path.name[:2])
         except ValueError:
             continue
-        if 0 <= number <= 19:
+        if 0 <= number <= 20:
             result.append(path)
     return sorted(result)
 
@@ -281,8 +281,8 @@ def main() -> None:
     EN_OUT.mkdir(parents=True)
 
     documents = source_documents()
-    if len(documents) != 20:
-        raise RuntimeError(f"Expected 20 numbered documents (00-19), found {len(documents)}.")
+    if len(documents) != 21:
+        raise RuntimeError(f"Expected 21 numbered documents (00-20), found {len(documents)}.")
 
     tr_paths: list[Path] = []
     en_paths: list[Path] = []

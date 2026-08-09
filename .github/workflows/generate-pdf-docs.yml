@@ -5,9 +5,15 @@ on:
     branches:
       - main
     paths:
-      - 'docs/**/*.md'
+      - 'docs/0?-*.md'
+      - 'docs/1?-*.md'
+      - 'docs/20-docker-runbook.md'
       - 'scripts/generate_docs_pdf.py'
       - '.github/workflows/generate-pdf-docs.yml'
+
+concurrency:
+  group: pdf-docs-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -31,15 +37,24 @@ jobs:
       - name: Install PDF dependencies
         run: python -m pip install --disable-pip-version-check reportlab==4.4.3 pypdf==6.0.0
 
-      - name: Generate TR and EN PDFs
-        run: python scripts/generate_docs_pdf.py
+      - name: Generate deterministic TR and EN PDFs
+        shell: bash
+        run: |
+          python - <<'PY'
+          from reportlab import rl_config
+          import runpy
+          rl_config.invariant = 1
+          runpy.run_path('scripts/generate_docs_pdf.py', run_name='__main__')
+          PY
 
       - name: Verify generated PDF set
         shell: bash
         run: |
           set -euo pipefail
-          test "$(find docs/pdf/TR -maxdepth 1 -name 'TR_*.pdf' | wc -l)" -eq 20
-          test "$(find docs/pdf/EN -maxdepth 1 -name 'EN_*.pdf' | wc -l)" -eq 20
+          test "$(find docs/pdf/TR -maxdepth 1 -name 'TR_*.pdf' | wc -l)" -eq 21
+          test "$(find docs/pdf/EN -maxdepth 1 -name 'EN_*.pdf' | wc -l)" -eq 21
+          test -s docs/pdf/TR/TR_20-docker-runbook.pdf
+          test -s docs/pdf/EN/EN_20-docker-runbook.pdf
           test -s docs/pdf/TR_FinWallet_Tum_Dokumanlar.pdf
           test -s docs/pdf/EN_FinWallet_All_Documents.pdf
 

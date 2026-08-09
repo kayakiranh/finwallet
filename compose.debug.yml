@@ -1,0 +1,36 @@
+# Optional local-development overlay.
+# Usage: docker compose -f compose.yml -f compose.debug.yml up --build
+# Backend/provider ports bind only to loopback so normal client traffic should still use Gateway :8080.
+
+services:
+  mssql:
+    ports:
+      - "127.0.0.1:${MSSQL_PORT:-1433}:1433"
+
+  redis:
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+
+  finwallet-api:
+    ports:
+      - "127.0.0.1:${FINWALLET_API_DEBUG_PORT:-8081}:8080"
+
+  fake-bank:
+    ports:
+      - "127.0.0.1:${FAKE_BANK_DEBUG_PORT:-8082}:8080"
+
+  fake-fraud:
+    ports:
+      - "127.0.0.1:${FAKE_FRAUD_DEBUG_PORT:-8083}:8080"
+
+  fake-cutoff:
+    ports:
+      - "127.0.0.1:${FAKE_CUTOFF_DEBUG_PORT:-8084}:8080"
+
+  fake-campaign:
+    ports:
+      - "127.0.0.1:${FAKE_CAMPAIGN_DEBUG_PORT:-8085}:8080"
+
+  fake-communication:
+    ports:
+      - "127.0.0.1:${FAKE_COMMUNICATION_DEBUG_PORT:-8086}:8080"

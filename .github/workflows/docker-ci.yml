@@ -1,0 +1,123 @@
+name: FinWallet Docker CI
+
+on:
+  push:
+    branches:
+      - main
+      - 'agent/**'
+    paths:
+      - 'compose.yml'
+      - 'compose.debug.yml'
+      - 'compose.production.yml'
+      - '.dockerignore'
+      - '.env.example'
+      - 'docker/**'
+      - 'src/**'
+      - 'simulators/**'
+      - 'database/**'
+      - 'Directory.Build.props'
+      - 'Directory.Packages.props'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'compose.yml'
+      - 'compose.debug.yml'
+      - 'compose.production.yml'
+      - '.dockerignore'
+      - '.env.example'
+      - 'docker/**'
+      - 'src/**'
+      - 'simulators/**'
+      - 'database/**'
+      - 'Directory.Build.props'
+      - 'Directory.Packages.props'
+
+permissions:
+  contents: read
+
+jobs:
+  docker-validate-build-smoke:
+    name: Validate, build and smoke-test complete Docker stack
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Create CI environment file
+        run: cp .env.example .env
+
+      - name: Validate default Compose model
+        run: docker compose --env-file .env -f compose.yml config --quiet
+
+      - name: Validate debug overlay
+        run: docker compose --env-file .env -f compose.yml -f compose.debug.yml config --quiet
+
+      - name: Validate production-like overlay
+        run: docker compose --env-file .env -f compose.yml -f compose.production.yml config --quiet
+
+      - name: Build all .NET service images
+        env:
+          DOCKER_BUILDKIT: "1"
+          COMPOSE_DOCKER_CLI_BUILD: "1"
+        run: >-
+          docker compose --env-file .env -f compose.yml build
+          gateway
+          finwallet-api
+          fake-bank
+          fake-fraud
+          fake-cutoff
+          fake-campaign
+          fake-communication
+
+      - name: Start complete Docker stack
+        run: docker compose --env-file .env -f compose.yml up -d --no-build
+
+      - name: Show service state
+        run: docker compose --env-file .env -f compose.yml ps -a
+
+      - name: Wait for Gateway health
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent --show-error http://localhost:8080/health/live >/dev/null; then
+              echo "Gateway is healthy."
+              exit 0
+            fi
+            echo "Gateway not ready yet (${attempt}/60)."
+            sleep 2
+          done
+          docker compose --env-file .env -f compose.yml ps -a
+          docker compose --env-file .env -f compose.yml logs --tail 250
+          exit 1
+
+      - name: Verify MSSQL schema initialization
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose --env-file .env -f compose.yml exec -T mssql bash -lc '
+            SQLCMD=$(command -v /opt/mssql-tools18/bin/sqlcmd || command -v /opt/mssql-tools/bin/sqlcmd) &&
+            "$SQLCMD" -S localhost -U sa -P "$MSSQL_SA_PASSWORD" -C -b -d FinWallet \
+              -Q "SET NOCOUNT ON; IF (SELECT COUNT(1) FROM dbo.SchemaVersions WHERE Version IN (''001'',''002'',''003'')) <> 3 THROW 50001, ''Schema versions missing'', 1; SELECT Version FROM dbo.SchemaVersions ORDER BY Version;"
+          '
+
+      - name: Verify Redis authentication and persistence configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose --env-file .env -f compose.yml exec -T redis sh -lc '
+            redis-cli -a "$REDIS_PASSWORD" --no-auth-warning ping | grep -q PONG &&
+            redis-cli -a "$REDIS_PASSWORD" --no-auth-warning CONFIG GET appendonly | grep -q yes
+          '
+
+      - name: Capture failure diagnostics
+        if: failure()
+        run: |
+          docker compose --env-file .env -f compose.yml ps -a || true
+          docker compose --env-file .env -f compose.yml logs --tail 300 || true
+
+      - name: Remove CI containers, networks and disposable volumes
+        if: always()
+        run: docker compose --env-file .env -f compose.yml down -v --remove-orphans

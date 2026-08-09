@@ -1,0 +1,291 @@
+name: ${COMPOSE_PROJECT_NAME:-finwallet}
+
+x-dotnet-common: &dotnet-common
+  restart: unless-stopped
+  init: true
+  read_only: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  tmpfs:
+    - /tmp:size=64m,mode=1777
+  stop_grace_period: 20s
+  pids_limit: 256
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "5"
+  environment: &dotnet-environment
+    ASPNETCORE_ENVIRONMENT: Docker
+    ASPNETCORE_URLS: http://+:8080
+    Urls: http://+:8080
+    DOTNET_RUNNING_IN_CONTAINER: "true"
+    DOTNET_EnableDiagnostics: "0"
+    TZ: Etc/UTC
+
+x-provider-security: &provider-security
+  Platform__Security__RequireInternalServiceKey: "true"
+  Platform__Security__InternalServiceKey: ${DOWNSTREAM_SERVICE_KEY:?Set DOWNSTREAM_SERVICE_KEY in .env}
+  Platform__Swagger__Enabled: "true"
+
+services:
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    restart: unless-stopped
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?Set MSSQL_SA_PASSWORD in .env}
+    volumes:
+      - mssql_data:/var/opt/mssql
+      - mssql_backup:/var/opt/mssql/backup
+    networks:
+      - finwallet-data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          SQLCMD=$$(command -v /opt/mssql-tools18/bin/sqlcmd || command -v /opt/mssql-tools/bin/sqlcmd || true);
+          test -n "$$SQLCMD" &&
+          $$SQLCMD -S localhost -U sa -P "$$MSSQL_SA_PASSWORD" -C -Q "SELECT 1" -b -o /dev/null
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    shm_size: 1gb
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "5"
+
+  mssql-init:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    restart: "no"
+    depends_on:
+      mssql:
+        condition: service_healthy
+    environment:
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?Set MSSQL_SA_PASSWORD in .env}
+    volumes:
+      - ./database:/database:ro
+      - ./docker/mssql/init-db.sh:/docker/init-db.sh:ro
+    entrypoint:
+      - /bin/bash
+      - /docker/init-db.sh
+    networks:
+      - finwallet-data
+
+  redis:
+    image: redis:7.4.9-alpine
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+    command:
+      - /bin/sh
+      - -ec
+      - >-
+        exec redis-server
+        --appendonly yes
+        --appendfsync everysec
+        --save 60 1000
+        --maxmemory 256mb
+        --maxmemory-policy noeviction
+        --requirepass "$$REDIS_PASSWORD"
+    volumes:
+      - redis_data:/data
+    networks:
+      - finwallet-data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - redis-cli -a "$$REDIS_PASSWORD" --no-auth-warning ping | grep -q PONG
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    stop_grace_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  finwallet-api:
+    <<: *dotnet-common
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.webapi
+      args:
+        PROJECT_FILE: src/FinWallet.Api/FinWallet.Api.csproj
+        BUILD_CONFIGURATION: Release
+    command: ["FinWallet.Api.dll"]
+    expose: ["8080"]
+    mem_limit: 768m
+    cpus: 2.0
+    networks:
+      - finwallet-backend
+      - finwallet-data
+    environment:
+      <<: *dotnet-environment
+      FinWallet__Sql__ConnectionString: >-
+        Server=mssql,1433;Database=FinWallet;User Id=sa;Password=${MSSQL_SA_PASSWORD:?Set MSSQL_SA_PASSWORD in .env};Encrypt=False;TrustServerCertificate=True;Pooling=True;Min Pool Size=5;Max Pool Size=100;Connect Timeout=5;Load Balance Timeout=300;Application Name=FinWallet.Api
+      FinWallet__Redis__ConnectionString: redis:6379,password=${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env},abortConnect=false,ssl=false
+      FinWallet__Security__RegistrationOtpPepper: ${REGISTRATION_OTP_PEPPER:?Set REGISTRATION_OTP_PEPPER in .env}
+      FinWallet__Security__Jwt__Issuer: ${JWT_ISSUER:-finwallet-docker}
+      FinWallet__Security__Jwt__Audience: ${JWT_AUDIENCE:-finwallet-api}
+      FinWallet__Security__Jwt__SigningKey: ${JWT_SIGNING_KEY:?Set JWT_SIGNING_KEY in .env}
+      FinWallet__Gateway__InternalServiceKey: ${INTERNAL_SERVICE_KEY:?Set INTERNAL_SERVICE_KEY in .env}
+      FinWallet__Integrations__FakeCommunication__BaseUrl: http://gateway:8080/providers/communication/
+      FinWallet__Integrations__FakeFraud__BaseUrl: http://gateway:8080/providers/fraud/
+      FinWallet__Integrations__FakeBank__BaseUrl: http://gateway:8080/providers/bank/
+      FinWallet__Integrations__FakeCutoff__BaseUrl: http://gateway:8080/providers/cutoff/
+      FinWallet__Integrations__FakeCampaign__BaseUrl: http://gateway:8080/providers/campaign/
+      Platform__Security__RequireInternalServiceKey: "true"
+      Platform__Security__InternalServiceKey: ${DOWNSTREAM_SERVICE_KEY:?Set DOWNSTREAM_SERVICE_KEY in .env}
+      Platform__Swagger__Enabled: "true"
+    depends_on:
+      mssql-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  fake-bank:
+    <<: *dotnet-common
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.webapi
+      args:
+        PROJECT_FILE: simulators/FakeBank.Api/FakeBank.Api.csproj
+        BUILD_CONFIGURATION: Release
+    command: ["FakeBank.Api.dll"]
+    expose: ["8080"]
+    mem_limit: 384m
+    cpus: 1.0
+    networks: [finwallet-backend]
+    environment:
+      <<: [*dotnet-environment, *provider-security]
+
+  fake-fraud:
+    <<: *dotnet-common
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.webapi
+      args:
+        PROJECT_FILE: simulators/FakeFraud.Api/FakeFraud.Api.csproj
+        BUILD_CONFIGURATION: Release
+    command: ["FakeFraud.Api.dll"]
+    expose: ["8080"]
+    mem_limit: 384m
+    cpus: 1.0
+    networks: [finwallet-backend]
+    environment:
+      <<: [*dotnet-environment, *provider-security]
+
+  fake-cutoff:
+    <<: *dotnet-common
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.webapi
+      args:
+        PROJECT_FILE: simulators/FakeCutoff.Api/FakeCutoff.Api.csproj
+        BUILD_CONFIGURATION: Release
+    command: ["FakeCutoff.Api.dll"]
+    expose: ["8080"]
+    mem_limit: 256m
+    cpus: 0.75
+    networks: [finwallet-backend]
+    environment:
+      <<: [*dotnet-environment, *provider-security]
+
+  fake-campaign:
+    <<: *dotnet-common
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.webapi
+      args:
+        PROJECT_FILE: simulators/FakeCampaign.Api/FakeCampaign.Api.csproj
+        BUILD_CONFIGURATION: Release
+    command: ["FakeCampaign.Api.dll"]
+    expose: ["8080"]
+    mem_limit: 256m
+    cpus: 0.75
+    networks: [finwallet-backend]
+    environment:
+      <<: [*dotnet-environment, *provider-security]
+
+  fake-communication:
+    <<: *dotnet-common
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.webapi
+      args:
+        PROJECT_FILE: simulators/FakeCommunication.Api/FakeCommunication.Api.csproj
+        BUILD_CONFIGURATION: Release
+    command: ["FakeCommunication.Api.dll"]
+    expose: ["8080"]
+    mem_limit: 256m
+    cpus: 0.75
+    networks: [finwallet-backend]
+    environment:
+      <<: [*dotnet-environment, *provider-security]
+
+  gateway:
+    <<: *dotnet-common
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.webapi
+      args:
+        PROJECT_FILE: src/FinWallet.Gateway/FinWallet.Gateway.csproj
+        BUILD_CONFIGURATION: Release
+    command: ["FinWallet.Gateway.dll"]
+    ports:
+      - "${GATEWAY_PORT:-8080}:8080"
+    mem_limit: 512m
+    cpus: 1.5
+    networks: [finwallet-backend]
+    environment:
+      <<: *dotnet-environment
+      FinWallet__Security__Jwt__Issuer: ${JWT_ISSUER:-finwallet-docker}
+      FinWallet__Security__Jwt__Audience: ${JWT_AUDIENCE:-finwallet-api}
+      FinWallet__Security__Jwt__SigningKey: ${JWT_SIGNING_KEY:?Set JWT_SIGNING_KEY in .env}
+      Gateway__Security__InternalServiceKey: ${INTERNAL_SERVICE_KEY:?Set INTERNAL_SERVICE_KEY in .env}
+      Gateway__Security__DownstreamServiceKey: ${DOWNSTREAM_SERVICE_KEY:?Set DOWNSTREAM_SERVICE_KEY in .env}
+      Platform__Swagger__Enabled: "true"
+      ReverseProxy__Clusters__FinWalletCluster__Destinations__Primary__Address: http://finwallet-api:8080/
+      ReverseProxy__Clusters__FakeBankCluster__Destinations__Primary__Address: http://fake-bank:8080/
+      ReverseProxy__Clusters__FakeFraudCluster__Destinations__Primary__Address: http://fake-fraud:8080/
+      ReverseProxy__Clusters__FakeCutoffCluster__Destinations__Primary__Address: http://fake-cutoff:8080/
+      ReverseProxy__Clusters__FakeCampaignCluster__Destinations__Primary__Address: http://fake-campaign:8080/
+      ReverseProxy__Clusters__FakeCommunicationCluster__Destinations__Primary__Address: http://fake-communication:8080/
+    depends_on:
+      finwallet-api:
+        condition: service_started
+      fake-bank:
+        condition: service_started
+      fake-fraud:
+        condition: service_started
+      fake-cutoff:
+        condition: service_started
+      fake-campaign:
+        condition: service_started
+      fake-communication:
+        condition: service_started
+
+networks:
+  finwallet-backend:
+    driver: bridge
+  finwallet-data:
+    driver: bridge
+    internal: true
+
+volumes:
+  mssql_data:
+    name: ${COMPOSE_PROJECT_NAME:-finwallet}_mssql_data
+  mssql_backup:
+    name: ${COMPOSE_PROJECT_NAME:-finwallet}_mssql_backup
+  redis_data:
+    name: ${COMPOSE_PROJECT_NAME:-finwallet}_redis_data

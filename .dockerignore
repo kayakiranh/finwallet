@@ -1,0 +1,74 @@
+# Git / CI metadata
+.git
+.gitignore
+.github
+
+# IDE / local state
+.vs
+.vscode
+.idea
+**/*.user
+**/*.suo
+
+# Build output
+**/bin
+**/obj
+**/out
+**/publish
+artifacts
+
+# Tests / coverage / benchmarks are not needed in runtime image builds
+**/TestResults
+coverage
+coverage-*
+BenchmarkDotNet.Artifacts
+
+# Logs / diagnostics
+logs
+**/logs
+**/*.log
+**/*.dmp
+**/*.dump
+**/*.gcdump
+**/*.trace
+**/*.nettrace
+
+# Local secrets / overrides
+.env
+.env.*
+!.env.example
+**/appsettings.Local.json
+**/appsettings.local.json
+**/appsettings.*.Local.json
+**/appsettings.*.local.json
+**/secrets
+**/*.pfx
+**/*.p12
+**/*.pem
+**/*.key
+
+# Persistent runtime data belongs to named volumes
+.data
+data
+tmp
+*.mdf
+*.ldf
+*.bak
+dump.rdb
+appendonly.aof
+appendonlydir
+
+# Documentation and generated PDF binaries are not required for image builds
+docs
+scripts
+
+# Docker orchestration files do not need to enter application images
+docker
+compose*.yml
+compose*.yaml
+docker-compose*.yml
+docker-compose*.yaml
+
+# OS files
+.DS_Store
+Thumbs.db

@@ -25,7 +25,8 @@
 18. [17 - AI-Assisted Architecture Decisions / AI Destekli Mimari Kararlar](17-ai-architecture-decisions.md)
 19. [18 - Performance Review / Performans İncelemesi](18-performance-review.md)
 20. [19 - Final Technical Review / Son Teknik İnceleme](19-final-technical-review.md)
-21. [ADR Index / ADR İndeksi](adr/README.md)
+21. [20 - Docker Runbook / Docker Çalıştırma Rehberi](20-docker-runbook.md)
+22. [ADR Index / ADR İndeksi](adr/README.md)
 
 ### Yeni geliştirici için okuma sırası
 1. `00-master-specification.md` — proje scope ve invariant'lar.
@@ -37,7 +38,8 @@
 7. `07-database.md` ve `08-financial-flows.md` — persistence ve accounting.
 8. `09-security.md` ve `15-gateway-platform-security.md` — güvenlik modeli.
 9. `10-testing.md` — mock ve gerçek altyapı test ayrımı.
-10. `18-performance-review.md` ve `19-final-technical-review.md` — tuning ve kalan teknik borç.
+10. `20-docker-runbook.md` — tüm servisleri Docker ile build/start/stop/debug etme, volume ve backup yönetimi.
+11. `18-performance-review.md` ve `19-final-technical-review.md` — tuning ve kalan teknik borç.
 
 ### Güncel runtime topolojisi
 ```text
@@ -75,7 +77,8 @@ Bir feature tamamlanmış sayılmadan önce etkilenen API, database, security, i
 18. [17 - AI-Assisted Architecture Decisions](17-ai-architecture-decisions.md)
 19. [18 - Performance Review](18-performance-review.md)
 20. [19 - Final Technical Review](19-final-technical-review.md)
-21. [ADR Index](adr/README.md)
+21. [20 - Docker Runbook](20-docker-runbook.md)
+22. [ADR Index](adr/README.md)
 
 ### Recommended reading order for a new engineer
 1. `00-master-specification.md` — project scope and invariants.
@@ -87,7 +90,8 @@ Bir feature tamamlanmış sayılmadan önce etkilenen API, database, security, i
 7. `07-database.md` and `08-financial-flows.md` — persistence and accounting.
 8. `09-security.md` and `15-gateway-platform-security.md` — security model.
 9. `10-testing.md` — mocks versus real-infrastructure tests.
-10. `18-performance-review.md` and `19-final-technical-review.md` — tuning and remaining technical debt.
+10. `20-docker-runbook.md` — build/start/stop/debug the complete Docker stack and manage volumes/backups.
+11. `18-performance-review.md` and `19-final-technical-review.md` — tuning and remaining technical debt.
 
 ### Current runtime topology
 ```text
