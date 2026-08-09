@@ -10,6 +10,7 @@ FinWallet prioritizes financial correctness and credential safety over runtime c
 - Security algorithms/work factors are fixed in code and cannot be weakened through application configuration.
 - Deployment secrets remain external to source control.
 - Passwords, OTPs, JWTs, refresh tokens, Authorization headers and signing secrets are never logged.
+- MSSQL is the durable authentication/financial source of truth; Redis is transient support only.
 
 ## Customer data separation
 
@@ -30,18 +31,14 @@ Session state belongs to `CustomerSession` and refresh-token state belongs to `R
 
 Registration uses an explicit allow-list rather than accepting arbitrary country/phone combinations.
 
-Phase 2 baseline:
-
 | Country | Calling code | National digits |
 |---|---:|---:|
 | TR | +90 | 10 |
 | AZ | +994 | 9 |
 
-Phone numbers are normalized into an E.164-like `+<digits>` value before lookup. The selected registration country must match the normalized phone calling code and expected national-number length.
+Phone numbers are normalized into an E.164-like `+<digits>` value before lookup. The selected registration country must match the normalized phone calling code and expected national-number length. MSSQL additionally enforces a unique normalized phone number so two concurrent registration requests cannot create duplicate customers even if both pass an application-level pre-check.
 
-Adding another registration country is a deliberate business/security change and should update tests and this document.
-
-## Password policy
+## Password policy and storage
 
 The password policy is fixed:
 
@@ -60,6 +57,27 @@ Password storage uses the .NET one-shot `Rfc2898DeriveBytes.Pbkdf2` API:
 - schema version `1` persisted for future migration only.
 
 The raw password is never persisted.
+
+## MSSQL authentication persistence
+
+Authentication persistence uses explicit parameterized `Microsoft.Data.SqlClient` commands rather than an ORM in the initial implementation.
+
+Durable tables:
+
+- `Customers`;
+- `CustomerCredentials`;
+- `CustomerSessions`;
+- `RefreshTokens`.
+
+Important database constraints:
+
+- normalized phone number is unique;
+- refresh-token hash is unique;
+- session/token relationships use foreign keys;
+- lifecycle timestamp checks reject obviously inconsistent state;
+- rowversion columns exist for later optimistic-concurrency paths.
+
+Registration writes Customer and CustomerCredential in one short SQL transaction. External SMS calls occur only after that transaction has completed.
 
 ## Login lockout
 
@@ -95,12 +113,13 @@ Algorithm and lifetime are not runtime options.
 A successful login creates a device-bound `CustomerSession`.
 
 - absolute session lifetime: 30 days;
+- device identifier is bounded to 128 characters;
 - session can be revoked independently of JWT expiration;
 - `sid` claim links an access token to its server-side session;
 - last activity is updated on successful refresh;
-- future high-risk authorization can combine JWT validation with server-side session state.
+- persisted session state is restored through explicit domain factories rather than reflection/private-setter mutation.
 
-## Refresh tokens
+## Refresh tokens and concurrency
 
 Refresh tokens are opaque cryptographic random values:
 
@@ -110,25 +129,34 @@ Refresh tokens are opaque cryptographic random values:
 - server persists SHA-256 token hash for lookup;
 - each refresh token is single-use;
 - each token has a maximum fourteen-day lifetime and cannot outlive the absolute session expiration;
-- successful refresh consumes the old token and creates a replacement in one persistence transaction;
 - use of an already-consumed token is treated as reuse and revokes the associated session/token family.
 
-## OTP
+Concurrent rotation is protected in MSSQL, not only in application memory. The persistence operation inserts the replacement inside the transaction and conditionally consumes the original token with:
 
-Registration OTP rules are implemented behind `IRegistrationOtpService` so Redis details do not enter Application/Domain.
+- matching token ID/session/hash;
+- `ConsumedAt IS NULL`;
+- `RevokedAt IS NULL`.
 
-The Phase 3 implementation must provide:
+Only one concurrent request can affect the original token row. A losing request rolls back its replacement insert, is treated as replay/reuse, and triggers session/token-family revocation.
 
-- cryptographically secure numeric OTP generation;
-- short TTL;
-- bounded verification attempts;
-- resend cooldown;
-- replacement/invalidation of previous active challenges;
-- atomic verify-and-consume behavior;
-- no raw OTP logging;
-- Redis loss behavior that cannot accidentally activate a customer.
+## Registration OTP in Redis
 
-FakeCommunication receives the raw OTP only for the simulated SMS delivery call.
+Registration OTP is intentionally transient and therefore stored in Redis, but customer activation requires a successful Redis verify-and-consume result and durable MSSQL customer state.
+
+Fixed OTP policy:
+
+- six numeric digits generated with `RandomNumberGenerator`;
+- five-minute TTL;
+- maximum five failed verification attempts;
+- thirty-second resend cooldown;
+- a new allowed issue replaces the previous active challenge;
+- successful verification atomically deletes the challenge, preventing replay.
+
+Raw OTP is not stored in Redis. Redis stores a customer-bound HMAC-SHA256 digest using a deployment pepper secret of at least 32 UTF-8 bytes. The pepper is provided by a secret store/environment and is never a runtime-selectable algorithm/work-factor setting.
+
+OTP issue and verification state changes use Redis Lua scripts so cooldown checks, attempt increments and verify-and-consume behavior are atomic on the Redis server. Redis failure fails closed: the OTP service throws/fails and customer activation is not performed.
+
+FakeCommunication receives the raw OTP only for simulated SMS delivery.
 
 ## Sensitive logging policy
 
@@ -137,14 +165,20 @@ Never log:
 - raw password;
 - password hash or salt;
 - OTP;
+- OTP HMAC digest or pepper;
 - JWT access token;
 - refresh token or refresh-token hash;
 - Authorization header;
-- JWT signing key or other secrets.
+- JWT signing key or other secrets;
+- MSSQL/Redis connection secrets.
 
 Phone/email/account identifiers must pass centralized masking before financial/application/audit logs are written.
 
 ## Threat scenarios
+
+### Concurrent registration
+
+Control: normalized phone unique constraint in MSSQL is the final guarantee; application existence checks are only an early user-friendly optimization.
 
 ### Credential stuffing / brute force
 
@@ -152,18 +186,19 @@ Controls:
 
 - fixed password hashing cost;
 - login failure counters and temporary locks;
-- API rate limiting added at the HTTP boundary;
+- API rate limiting at the HTTP boundary;
 - generic invalid-credential response.
 
-### OTP brute force
+### OTP brute force/replay
 
 Controls:
 
 - short TTL;
-- attempt limit;
+- five-attempt limit;
 - resend cooldown;
-- atomic consume;
-- registration rate limiting.
+- HMAC digest rather than raw OTP storage;
+- atomic verify-and-consume Lua script;
+- registration rate limiting at the API boundary.
 
 ### Refresh-token theft/replay
 
@@ -172,7 +207,8 @@ Controls:
 - opaque random token;
 - server stores only hash;
 - single-use rotation;
-- reuse detection revokes session;
+- MSSQL compare-and-set rotation;
+- reuse detection revokes session/token family;
 - absolute session lifetime.
 
 ### JWT theft
@@ -183,7 +219,7 @@ Controls:
 - minimal claims;
 - session identifier correlation;
 - signing key stored outside source;
-- session revocation for high-risk authorization paths.
+- server-side session revocation support for high-risk authorization paths.
 
 ### Log leakage
 
@@ -194,11 +230,10 @@ Controls:
 - explicit forbidden-sensitive-data list;
 - security/QA tests will inspect generated log files for forbidden values.
 
-## Remaining Phase 2/3 work
+## Remaining work
 
-- durable MSSQL implementations of auth stores;
-- Redis OTP implementation;
-- API rate limiting and auth middleware wiring;
-- logout/session revocation endpoint;
-- authentication unit/integration/security tests;
-- secret configuration validation at application startup.
+- dependency-injection/startup wiring for MSSQL, Redis and JWT settings;
+- API rate limiting and authentication endpoint wiring;
+- logout endpoint and authorization/session checks;
+- authentication integration/security/concurrency tests against real MSSQL/Redis containers;
+- centralized masked structured file logging.

@@ -7,8 +7,8 @@
 | .NET | 8 | Runtime and application platform |
 | ASP.NET Core | 8 | Main REST API and fake provider APIs |
 | C# | 12 | Application language |
-| MSSQL | Planned integration | Durable persistence and financial source of truth |
-| Redis | Planned integration | Transient distributed state, OTP, fraud counters, idempotency hot cache and coordination |
+| MSSQL | Microsoft.Data.SqlClient 7.0.2 | Durable persistence and financial source of truth |
+| Redis | StackExchange.Redis 3.0.17 | Transient distributed state, OTP, fraud counters, idempotency hot cache and coordination |
 | JWT | ASP.NET Core JwtBearer 8.0.29 | Short-lived access-token authentication without ASP.NET Core Identity |
 | JSON Lines files | Project policy | Masked structured financial/application/audit logging |
 | GitHub | Repository workflow | Source control, issues and pull requests |
@@ -39,7 +39,35 @@ Every new package must be added through central package management in `Directory
 | Alternatives considered | Hand-written JWT parsing/signing/validation was rejected because implementing a security token standard manually adds unnecessary security risk. ASP.NET Core Identity was rejected by explicit project requirement. |
 | Financial/security impact | Security-critical authentication dependency; version must remain on the supported .NET 8 patch line and be reviewed during dependency updates. |
 
-The package is Microsoft-maintained, open source and MIT licensed. Version `8.0.29` is the current .NET 8 patch available when this package decision was made in August 2026.
+### Microsoft.Data.SqlClient
+
+| Field | Decision |
+|---|---|
+| Package | `Microsoft.Data.SqlClient` |
+| Version | `7.0.2` |
+| License | MIT |
+| Owner project(s) | `FinWallet.Infrastructure` |
+| Purpose | Official SQL Server provider used for explicit async SQL commands, transactions and concurrency-sensitive persistence. |
+| Why required | MSSQL is the durable financial source of truth and requires a supported SQL Server protocol/provider. |
+| Alternatives considered | EF Core was not selected for the first persistence slice because auth/financial concurrency SQL should remain explicit. Dapper was not added because the initial store does not require an additional mapping abstraction over `Microsoft.Data.SqlClient`. |
+| Financial/security impact | Critical persistence dependency. SQL parameters are mandatory and transaction boundaries remain explicit. |
+
+`Microsoft.Data.SqlClient 7.0.2` is Microsoft-maintained, MIT licensed and targets .NET 8.
+
+### StackExchange.Redis
+
+| Field | Decision |
+|---|---|
+| Package | `StackExchange.Redis` |
+| Version | `3.0.17` |
+| License | MIT |
+| Owner project(s) | `FinWallet.Infrastructure` |
+| Purpose | Redis access for OTP state, velocity counters, hot idempotency coordination and other transient distributed state requiring atomic Redis operations. |
+| Why required | The built-in distributed-cache abstraction does not expose the atomic compare/script primitives required by the planned OTP and concurrency-sensitive transient workflows. |
+| Alternatives considered | `IDistributedCache` alone was rejected for these operations because it intentionally exposes a simpler cache abstraction. Redis remains optional for financial correctness; durable money state is never stored here. |
+| Financial/security impact | Security-sensitive for OTP and rate/velocity state, but never the financial source of truth. Redis unavailability must fail safely for authentication/fraud operations that depend on it. |
+
+`StackExchange.Redis 3.0.17` is MIT licensed and compatible with .NET 8.
 
 ## Password cryptography
 
@@ -62,10 +90,8 @@ Every future package entry must include:
 
 ## Expected package areas requiring later decisions
 
-The following capabilities will need explicit package decisions during implementation; no package is approved merely by appearing in this list:
+The following capabilities still require explicit package decisions during implementation; no package is approved merely by appearing in this list:
 
-- MSSQL client/data access
-- Redis client
 - structured file logging
 - test frameworks and test infrastructure
 

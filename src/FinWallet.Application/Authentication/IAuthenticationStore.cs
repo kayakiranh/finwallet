@@ -3,64 +3,39 @@ using FinWallet.Domain.Authentication;
 namespace FinWallet.Application.Authentication;
 
 /// <summary>
-/// TR: Login, session ve refresh-token rotation işlemlerini MSSQL implementasyonundan ayıran ve güvenlik state değişiklikleri için gerekli atomic persistence sınırlarını tanımlar.
-/// EN: Defines the atomic persistence boundaries required for login, session and refresh-token rotation while decoupling those flows from the MSSQL implementation.
+/// TR: Login, session ve refresh-token işlemlerini MSSQL implementasyonundan ayıran ve güvenlik state değişiklikleri için atomik persistence sınırlarını tanımlar.
+/// EN: Defines atomic persistence boundaries for login, session and refresh-token operations while decoupling them from the MSSQL implementation.
 /// </summary>
 public interface IAuthenticationStore
 {
     /// <summary>
-    /// TR: Normalize telefon numarasıyla login için Customer ve CustomerCredential kayıtlarını birlikte yükler.
-    /// EN: Loads Customer and CustomerCredential records together for login using a normalized phone number.
+    /// TR: Normalize telefon numarasıyla login için Customer ve CustomerCredential state'ini birlikte yükler.
+    /// EN: Loads Customer and CustomerCredential state together for login using a normalized phone number.
     /// </summary>
-    /// <param name="normalizedPhoneNumber">
-    /// TR: Login lookup için kullanılacak normalize uluslararası telefon numarası.
-    /// EN: Normalized international phone number used for login lookup.
-    /// </param>
-    /// <param name="cancellationToken">
-    /// TR: Kalıcılık sorgusunun iptal sinyali.
-    /// EN: Cancellation signal for the persistence query.
-    /// </param>
-    /// <returns>
-    /// TR: Eşleşen login verisini; kayıt yoksa null döndürür.
-    /// EN: Returns matching login data, or null when no record exists.
-    /// </returns>
+    /// <param name="normalizedPhoneNumber">TR: Login lookup için normalize telefon numarası. EN: Normalized phone number used for login lookup.</param>
+    /// <param name="cancellationToken">TR: Persistence sorgusunun iptal sinyali. EN: Cancellation signal for the persistence query.</param>
+    /// <returns>TR: Eşleşen login verisini; kayıt yoksa null döndürür. EN: Returns matching login data, or null when no record exists.</returns>
     Task<AuthenticationLoginData?> FindLoginDataAsync(string normalizedPhoneNumber, CancellationToken cancellationToken);
 
     /// <summary>
-    /// TR: Başarısız login sonrası değişen credential lockout state'ini kalıcı hale getirir.
-    /// EN: Persists credential lockout state changed after a failed login attempt.
+    /// TR: Parola doğrulaması başarısız olduğunda credential satırını kısa DB lock altında yeniden yükler, domain lockout kuralını güncel state'e uygular ve sonucu atomik olarak kalıcılaştırır; paralel yanlış login'lerde lost-update oluşmasını engeller.
+    /// EN: When password verification fails, reloads the credential row under a short database lock, applies the domain lockout rule to current state and persists it atomically, preventing lost updates across concurrent failed logins.
     /// </summary>
-    /// <param name="credential">
-    /// TR: Başarısız login sayacı veya lock bilgisi güncellenmiş credential nesnesi.
-    /// EN: Credential object whose failed-login counter or lock information was updated.
-    /// </param>
-    /// <param name="cancellationToken">
-    /// TR: Kalıcı güncelleme işleminin iptal sinyali.
-    /// EN: Cancellation signal for the persistence update.
-    /// </param>
-    Task UpdateCredentialAsync(CustomerCredential credential, CancellationToken cancellationToken);
+    /// <param name="customerId">TR: Başarısız login'in ait olduğu müşteri kimliği. EN: Customer identifier associated with the failed login.</param>
+    /// <param name="failedAt">TR: Başarısız login'in UTC zamanı. EN: UTC timestamp of the failed login.</param>
+    /// <param name="cancellationToken">TR: Atomik persistence işleminin iptal sinyali. EN: Cancellation signal for the atomic persistence operation.</param>
+    Task RegisterFailedLoginAsync(Guid customerId, DateTimeOffset failedAt, CancellationToken cancellationToken);
 
     /// <summary>
-    /// TR: Başarılı login sonrası credential reset state'i, yeni CustomerSession ve ilk RefreshToken kaydını tek MSSQL transaction içinde kalıcı hale getirir.
-    /// EN: Persists the reset credential state, new CustomerSession and initial RefreshToken in one MSSQL transaction after successful login.
+    /// TR: Başarılı parola doğrulaması sonrasında credential satırını kısa DB lock altında kontrol eder; halen geçici lock yoksa failed-login state'ini temizleyip yeni session ve ilk refresh token'ı tek transaction içinde oluşturur.
+    /// EN: After successful password verification, checks the credential row under a short database lock and, only when no temporary lock is currently active, clears failed-login state and creates the new session plus initial refresh token in one transaction.
     /// </summary>
-    /// <param name="credential">
-    /// TR: Başarılı login nedeniyle failed-login state'i temizlenmiş credential.
-    /// EN: Credential whose failed-login state was cleared after successful login.
-    /// </param>
-    /// <param name="session">
-    /// TR: Yeni müşteri session domain nesnesi.
-    /// EN: New customer-session domain object.
-    /// </param>
-    /// <param name="refreshToken">
-    /// TR: Session için oluşturulan ilk refresh-token kaydı.
-    /// EN: Initial refresh-token record created for the session.
-    /// </param>
-    /// <param name="cancellationToken">
-    /// TR: Atomik persistence işleminin iptal sinyali.
-    /// EN: Cancellation signal for the atomic persistence operation.
-    /// </param>
-    Task CreateSessionAsync(
+    /// <param name="credential">TR: Parola doğrulamasında kullanılan credential snapshot'ı. EN: Credential snapshot used for password verification.</param>
+    /// <param name="session">TR: Oluşturulmak istenen yeni müşteri session'ı. EN: New customer session intended to be created.</param>
+    /// <param name="refreshToken">TR: Session'a ait ilk refresh token kaydı. EN: Initial refresh-token record associated with the session.</param>
+    /// <param name="cancellationToken">TR: Atomik persistence işleminin iptal sinyali. EN: Cancellation signal for the atomic persistence operation.</param>
+    /// <returns>TR: Session transaction'ı commit edildiyse true; paralel denemeler credential'ı geçici lock'a sokmuşsa false döndürür. EN: Returns true when the session transaction commits; false when concurrent attempts have placed the credential under a temporary lock.</returns>
+    Task<bool> TryCreateSessionAsync(
         CustomerCredential credential,
         CustomerSession session,
         RefreshToken refreshToken,
@@ -70,44 +45,20 @@ public interface IAuthenticationStore
     /// TR: Ham token'dan türetilmiş hash ile Customer, Session ve RefreshToken state'ini refresh doğrulaması için birlikte yükler.
     /// EN: Loads Customer, Session and RefreshToken state together for refresh verification using a hash derived from the raw token.
     /// </summary>
-    /// <param name="tokenHash">
-    /// TR: İstemcinin ham refresh token'ından türetilmiş lookup hash değeri.
-    /// EN: Lookup hash derived from the client's raw refresh token.
-    /// </param>
-    /// <param name="cancellationToken">
-    /// TR: Kalıcılık sorgusunun iptal sinyali.
-    /// EN: Cancellation signal for the persistence query.
-    /// </param>
-    /// <returns>
-    /// TR: Eşleşen refresh context'ini; token bilinmiyorsa null döndürür.
-    /// EN: Returns the matching refresh context, or null when the token is unknown.
-    /// </returns>
+    /// <param name="tokenHash">TR: Refresh-token lookup hash'i. EN: Refresh-token lookup hash.</param>
+    /// <param name="cancellationToken">TR: Persistence sorgusunun iptal sinyali. EN: Cancellation signal for the persistence query.</param>
+    /// <returns>TR: Eşleşen refresh state'ini; token bilinmiyorsa null döndürür. EN: Returns matching refresh state, or null when the token is unknown.</returns>
     Task<RefreshAuthenticationData?> FindRefreshDataAsync(string tokenHash, CancellationToken cancellationToken);
 
     /// <summary>
-    /// TR: Eski refresh token'ın DB'de halen kullanılmamış olduğunu koşullu olarak doğrular; yalnızca bu koşul sağlanırsa consume state'i, replacement token ve session aktivitesini tek MSSQL transaction içinde yazar. Aynı token ile yarışan iki isteğin yalnızca biri true dönebilmelidir.
-    /// EN: Conditionally verifies that the previous refresh token is still unused in the database and, only when that condition succeeds, writes its consumed state, the replacement token and session activity in one MSSQL transaction. Only one of two racing requests using the same token may return true.
+    /// TR: Eski refresh token'ın DB'de halen kullanılmamış olduğunu koşullu doğrular; yalnızca koşul sağlanırsa consume state'i, replacement token ve session aktivitesini tek transaction içinde yazar.
+    /// EN: Conditionally verifies that the old refresh token is still unused in the database and writes its consumed state, replacement token and session activity in one transaction only when that condition succeeds.
     /// </summary>
-    /// <param name="session">
-    /// TR: Aktivite zamanı güncellenmiş müşteri session nesnesi.
-    /// EN: Customer session object with updated activity time.
-    /// </param>
-    /// <param name="consumedToken">
-    /// TR: Rotation sırasında consume edilmek istenen eski refresh token kaydı.
-    /// EN: Previous refresh-token record intended to be consumed during rotation.
-    /// </param>
-    /// <param name="replacementToken">
-    /// TR: Rotation sonucunda oluşturulacak yeni refresh token kaydı.
-    /// EN: New refresh-token record to be created by rotation.
-    /// </param>
-    /// <param name="cancellationToken">
-    /// TR: Atomik persistence işleminin iptal sinyali.
-    /// EN: Cancellation signal for the atomic persistence operation.
-    /// </param>
-    /// <returns>
-    /// TR: DB'deki token koşullu olarak consume edilip rotation commit edildiyse true; başka bir istek token'ı daha önce consume/revoke ettiyse false döndürür.
-    /// EN: Returns true when the database token was conditionally consumed and rotation committed; returns false when another request already consumed or revoked the token.
-    /// </returns>
+    /// <param name="session">TR: Aktivite zamanı güncellenmiş session state'i. EN: Session state with updated activity time.</param>
+    /// <param name="consumedToken">TR: Consume edilmek istenen eski refresh token. EN: Old refresh token intended to be consumed.</param>
+    /// <param name="replacementToken">TR: Rotation replacement refresh token. EN: Replacement refresh token created by rotation.</param>
+    /// <param name="cancellationToken">TR: Atomik persistence işleminin iptal sinyali. EN: Cancellation signal for the atomic persistence operation.</param>
+    /// <returns>TR: Bu request rotation yarışını kazanıp commit ettiyse true; başka request token'ı önce consume/revoke ettiyse false döndürür. EN: Returns true when this request wins and commits the rotation; false when another request already consumed or revoked the token.</returns>
     Task<bool> TryRotateRefreshTokenAsync(
         CustomerSession session,
         RefreshToken consumedToken,
@@ -115,20 +66,11 @@ public interface IAuthenticationStore
         CancellationToken cancellationToken);
 
     /// <summary>
-    /// TR: Refresh-token reuse veya güvenlik olayı tespit edildiğinde session'ı ve ona ait kullanılabilir refresh token'ları atomik olarak revoke eder.
-    /// EN: Atomically revokes a session and its usable refresh tokens when refresh-token reuse or another security event is detected.
+    /// TR: Refresh-token reuse veya başka güvenlik olayı tespit edildiğinde session ve token ailesini atomik revoke eder.
+    /// EN: Atomically revokes a session and its token family when refresh-token reuse or another security event is detected.
     /// </summary>
-    /// <param name="sessionId">
-    /// TR: Revoke edilecek müşteri session kimliği.
-    /// EN: Customer-session identifier to revoke.
-    /// </param>
-    /// <param name="revokedAt">
-    /// TR: Güvenlik revoke işleminin gerçekleştiği UTC zaman bilgisi.
-    /// EN: UTC timestamp at which the security revocation occurred.
-    /// </param>
-    /// <param name="cancellationToken">
-    /// TR: Atomik revoke işleminin iptal sinyali.
-    /// EN: Cancellation signal for the atomic revocation operation.
-    /// </param>
+    /// <param name="sessionId">TR: Revoke edilecek session kimliği. EN: Session identifier to revoke.</param>
+    /// <param name="revokedAt">TR: Güvenlik revoke UTC zamanı. EN: UTC security-revocation time.</param>
+    /// <param name="cancellationToken">TR: Atomik revoke işleminin iptal sinyali. EN: Cancellation signal for the atomic revocation operation.</param>
     Task RevokeSessionAsync(Guid sessionId, DateTimeOffset revokedAt, CancellationToken cancellationToken);
 }
