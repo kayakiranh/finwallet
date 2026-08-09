@@ -2,6 +2,7 @@
   <ItemGroup>
     <ProjectReference Include="..\FinWallet.Application\FinWallet.Application.csproj" />
     <ProjectReference Include="..\FinWallet.Infrastructure\FinWallet.Infrastructure.csproj" />
+    <ProjectReference Include="..\FinWallet.Shared.Contracts\FinWallet.Shared.Contracts.csproj" />
   </ItemGroup>
 
   <ItemGroup>
