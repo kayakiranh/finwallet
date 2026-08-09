@@ -1,3 +1,5 @@
+using FinWallet.Domain.Registration;
+
 namespace FinWallet.Domain.Customers;
 
 /// <summary>
@@ -25,12 +27,12 @@ public sealed class Customer
     /// EN: Unique identifier of the customer inside the system.
     /// </param>
     /// <param name="countryCode">
-    /// TR: Kayıt sırasında doğrulanmış iki harfli ülke kodu.
-    /// EN: Two-letter country code validated during registration.
+    /// TR: Kayıt policy'si tarafından daha önce kabul edilmiş iki harfli ülke kodu.
+    /// EN: Two-letter country code already accepted by the registration policy.
     /// </param>
     /// <param name="phoneNumber">
-    /// TR: Ülke kuralı ile uyumluluğu daha önce doğrulanmış normalize telefon numarası.
-    /// EN: Normalized phone number whose compatibility with the country rule has already been validated.
+    /// TR: Formatı ve ülke uyumluluğu daha önce doğrulanmış normalize telefon numarası.
+    /// EN: Normalized phone number whose format and country compatibility have already been validated.
     /// </param>
     /// <param name="email">
     /// TR: Finansal bildirimlerde kullanılabilen isteğe bağlı normalize e-posta adresi.
@@ -47,18 +49,18 @@ public sealed class Customer
     public static Customer Create(
         Guid id,
         string countryCode,
-        string phoneNumber,
+        PhoneNumber phoneNumber,
         string? email,
         DateTimeOffset createdAt)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(countryCode);
-        ArgumentException.ThrowIfNullOrWhiteSpace(phoneNumber);
+        ArgumentNullException.ThrowIfNull(phoneNumber);
 
         return new Customer
         {
             Id = id,
             CountryCode = countryCode,
-            PhoneNumber = phoneNumber,
+            PhoneNumber = phoneNumber.Value,
             Email = email,
             Status = CustomerStatus.PendingVerification,
             CreatedAt = createdAt
