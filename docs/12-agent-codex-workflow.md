@@ -1,215 +1,197 @@
-# Agent and Codex Development Workflow
+# Agent ve Codex Geliştirme Akışı / Agent and Codex Development Workflow
 
-## Purpose
+## Türkçe
 
-This document defines how FinWallet development is delegated, reviewed and merged when Codex or other coding agents are used. The repository, `AGENTS.md`, architecture documents, ADRs and GitHub issues remain the source of truth; agent chat history is not a substitute for repository documentation.
+### Amaç
+Bu belge, FinWallet geliştirmesinde Codex veya başka coding agent'ların nasıl scope alacağı, branch açacağı, doğrulama yapacağı, PR oluşturacağı ve review edileceğini tanımlar. Repository dosyaları, `AGENTS.md`, dokümanlar, ADR'ler ve GitHub issue/PR'ları source of truth'tür; chat geçmişi repository dokümantasyonunun yerine geçmez.
 
-## Operating model
+### Çalışma modeli
+Her agent:
+1. bounded bir task/issue alır;
+2. repository kurallarını okur;
+3. current `main`'den `agent/<task>` branch'i açar;
+4. gerekli kod/test/doc değişikliğini yapar;
+5. Release build/test ile doğrular;
+6. review edilebilir PR açar.
 
-FinWallet uses issue-driven, branch-isolated development. Each agent receives one bounded responsibility, reads the repository rules first, works on an isolated branch/worktree, produces small commits, validates its scope, and opens a reviewable pull request.
+Önerilen roller:
+- Solution Architect;
+- Security/Auth;
+- Financial Domain;
+- Persistence/Concurrency;
+- Integration;
+- QA/Chaos;
+- Code Review;
+- Documentation.
+
+### Source-of-truth sırası
+Çakışma olduğunda:
+1. current task acceptance criteria;
+2. `AGENTS.md`;
+3. master specification;
+4. accepted ADR;
+5. architecture/security/database/API docs;
+6. mevcut implementation convention;
+7. agent varsayımı.
+
+Agent üst seviye kuralı sessizce override edemez.
+
+### Branch/commit
+Branch: `agent/<bounded-task-name>`.
+
+Commit küçük ve cohesive olmalıdır. `implement everything`, `fix stuff` gibi belirsiz commitlerden kaçınılır. Financial behavior, package change, refactor ve docs mümkünse ayrı anlaşılır commitlerdir.
+
+### Coding agent sorumlulukları
+- financial invariant'ları koru;
+- class/interface/method/property için gerekli TR/EN XML docs'u yaz;
+- paid/freemium package ekleme;
+- yeni package inventory'yi güncelle;
+- changed behavior için test ekle/güncelle;
+- API/architecture/database/security docs'u güncelle;
+- external HTTP'yi financial SQL transaction içine alma;
+- idempotency/concurrency garantisini bozma;
+- Redis'i financial source of truth yapma;
+- tüm Markdown dokümanlarında TR+EN senkronunu koru.
+
+### Review agent kontrolü
+- architecture dependency violations;
+- ledger/financial correctness;
+- double-spend/lost update;
+- idempotency gaps;
+- auth/OTP/token weakness;
+- sensitive logging;
+- unsafe retry/timeout;
+- missing cancellation;
+- over-engineering;
+- undocumented package;
+- missing TR/EN code/doc documentation.
+
+### QA/Chaos senaryoları
+- simultaneous overspend;
+- repeated idempotency key;
+- same key + altered payload;
+- Redis outage;
+- provider timeout/500/slow;
+- fraud unavailable;
+- repeated refund/reversal;
+- ledger mismatch;
+- refresh token replay;
+- OTP brute force;
+- direct Gateway bypass;
+- rate-limit/resource-exhaustion.
+
+### PR akışı
+1. Branch'te bounded iş tamamlanır.
+2. Diff self-review edilir.
+3. Docs/test güncellenir.
+4. `dotnet restore`, Release `dotnet build --warnaserror`, `dotnet test` çalıştırılır.
+5. Draft PR açılır.
+6. Review bulguları küçük commitlerle kapatılır.
+7. CI green olur.
+8. Financial/security sensitive PR final review alır.
+9. Acceptance criteria karşılanınca merge edilir.
+
+### Parallel agent kuralı
+Domain boundary, DB/ledger rule, API contract, auth ve error/idempotency convention stabil olmadan aynı feature alanında paralel agent'lar kendi sözleşmelerini invent etmemelidir. File conflict düşük ve contract stabil ise paralel çalışma uygundur.
+
+### DoD
+Agent-generated code ancak acceptance criteria, build, relevant test, financial/security invariant, TR/EN XML docs, package inventory ve affected TR/EN Markdown docs tamamlandığında done sayılır.
+
+---
+
+## English
+
+### Purpose
+This document defines how Codex or other coding agents scope work, create branches, validate changes, open pull requests and participate in review for FinWallet. Repository files, `AGENTS.md`, documentation, ADRs and GitHub issues/PRs are the source of truth; chat history does not replace repository documentation.
+
+### Operating model
+Each agent:
+1. receives a bounded task/issue;
+2. reads repository rules;
+3. creates an `agent/<task>` branch from current `main`;
+4. makes required code/test/document changes;
+5. validates with Release build/tests;
+6. opens a reviewable pull request.
 
 Recommended roles:
+- Solution Architect;
+- Security/Auth;
+- Financial Domain;
+- Persistence/Concurrency;
+- Integration;
+- QA/Chaos;
+- Code Review;
+- Documentation.
 
-1. Solution Architect
-2. Financial Domain Agent
-3. Security/Auth Agent
-4. Integration Agent
-5. Persistence/Concurrency Agent
-6. QA/Chaos Agent
-7. Code Review Agent
-8. Documentation Agent
-
-## Codex execution model
-
-Codex can work through the Codex app, CLI, IDE integration or cloud execution. For this project the preferred mode is repository-scoped work with isolated tasks. When multiple agents run in parallel, each task must use an isolated worktree/branch so that unrelated changes do not share a working directory.
-
-Official OpenAI references:
-
-- Codex overview: https://openai.com/codex/
-- Codex app and multi-agent/worktree model: https://openai.com/index/introducing-the-codex-app/
-- Using Codex with ChatGPT plans: https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan
-
-## Source-of-truth order
-
-When instructions conflict, use this order:
-
-1. Explicit current task/issue acceptance criteria
-2. `AGENTS.md`
-3. Master specification
-4. Accepted ADRs
-5. Architecture/security/database/API documents
-6. Existing implementation conventions
-7. Agent assumptions
+### Source-of-truth order
+When instructions conflict:
+1. current task acceptance criteria;
+2. `AGENTS.md`;
+3. master specification;
+4. accepted ADR;
+5. architecture/security/database/API docs;
+6. existing implementation conventions;
+7. agent assumptions.
 
 An agent must not silently override a higher-level rule.
 
-## Before an agent starts
+### Branch/commit
+Branch format: `agent/<bounded-task-name>`.
 
-The agent must:
+Commits should be small and cohesive. Avoid vague commits such as `implement everything` or `fix stuff`. Financial behavior, package changes, refactors and documentation should remain independently understandable when practical.
 
-1. Read `AGENTS.md`.
-2. Read the assigned GitHub issue.
-3. Read relevant ADRs and documents.
-4. Inspect affected modules and tests.
-5. Identify dependencies on other open tasks.
-6. Stop scope expansion unless required for correctness.
-
-## Branch and worktree model
-
-Branch names use:
-
-```text
-agent/<bounded-task-name>
-```
-
-Examples:
-
-```text
-agent/security-auth
-agent/persistence-ledger
-agent/fake-bank
-agent/wallet-transfer
-```
-
-Parallel agents must not intentionally modify the same high-conflict files unless the issue explicitly coordinates that work.
-
-## Commit policy
-
-Commits must be small and cohesive. A commit should represent one technical idea that can be reviewed independently.
-
-Preferred examples:
-
-```text
-docs: require bilingual XML documentation
-chore: add solution build rules
-domain: add currency value object
-domain: add money value object
-auth: add customer credential model
-```
-
-Avoid commits such as:
-
-```text
-implement everything
-fix stuff
-large update
-```
-
-Do not mix unrelated refactoring, documentation, package changes and feature behavior in one commit when they can reasonably be separated.
-
-## Coding agent responsibilities
-
-A coding agent must:
-
+### Coding-agent responsibilities
 - preserve financial invariants;
-- add TR/EN XML documentation to every class/interface/method/property and other documented declarations;
-- avoid paid/freemium dependencies;
-- update package inventory for every new package;
-- add or update tests for changed behavior;
-- update API/architecture/database/security documentation when contracts change;
-- avoid external HTTP calls inside SQL transactions;
-- preserve idempotency and concurrency guarantees;
-- never make Redis the financial source of truth.
+- write required TR/EN XML docs for classes/interfaces/methods/properties;
+- do not add paid/freemium dependencies;
+- update package inventory for new packages;
+- add/update tests for changed behavior;
+- update API/architecture/database/security docs;
+- never place external HTTP inside a financial SQL transaction;
+- preserve idempotency/concurrency guarantees;
+- never make Redis the financial source of truth;
+- keep TR+EN Markdown documentation synchronized.
 
-## Review agent responsibilities
-
-The review agent does not assume the implementation is correct. It checks:
-
-- architecture boundary violations;
-- financial correctness;
-- ledger balancing;
-- lost-update/double-spend risks;
+### Review-agent checks
+- architecture dependency violations;
+- ledger/financial correctness;
+- double-spend/lost updates;
 - idempotency gaps;
-- duplicate callback handling;
-- security/token/OTP weaknesses;
-- sensitive logging leakage;
-- external integration retry/timeout mistakes;
-- missing cancellation propagation;
-- unnecessary abstractions;
-- undocumented NuGet packages;
-- missing TR/EN XML documentation.
+- auth/OTP/token weaknesses;
+- sensitive logging;
+- unsafe retry/timeout behavior;
+- missing cancellation;
+- over-engineering;
+- undocumented packages;
+- missing TR/EN code/documentation.
 
-Review outcomes are:
-
-- PASS
-- PASS WITH ISSUES
-- FAIL
-
-## QA/Chaos agent responsibilities
-
-The QA/Chaos agent actively tries to break the system. It should create or execute scenarios such as:
-
-- simultaneous overspend attempts;
-- repeated idempotency keys;
-- same key with altered payload;
-- duplicate bank callbacks;
+### QA/Chaos scenarios
+- simultaneous overspend;
+- repeated idempotency key;
+- same key + altered payload;
 - Redis outage;
 - provider timeout/500/slow response;
-- fraud provider unavailable;
-- campaign provider unavailable after a discounted price was shown;
-- cutoff provider unavailable;
-- notification provider failure after financial commit;
+- fraud unavailable;
 - repeated refund/reversal;
 - ledger mismatch;
-- reconciliation mismatch;
-- refresh token replay;
-- OTP brute force.
+- refresh-token replay;
+- OTP brute force;
+- direct Gateway bypass;
+- rate-limit/resource exhaustion.
 
-## Pull request flow
+### Pull-request flow
+1. Complete bounded work on the branch.
+2. Self-review the diff.
+3. Update docs/tests.
+4. Run `dotnet restore`, Release `dotnet build --warnaserror`, and `dotnet test`.
+5. Open a draft PR.
+6. Resolve review findings with small commits.
+7. CI becomes green.
+8. Financial/security-sensitive PRs receive final review.
+9. Merge only after acceptance criteria are satisfied.
 
-1. Agent finishes a bounded issue on its branch/worktree.
-2. Agent runs relevant build/tests/format/static checks.
-3. Agent reviews its own diff.
-4. Agent updates documentation.
-5. Agent opens a draft PR.
-6. Independent review agent inspects the PR.
-7. Findings are fixed with additional small commits.
-8. CI must pass.
-9. Financial/security-sensitive PRs receive a final architecture review.
-10. PR is merged only after acceptance criteria are satisfied.
+### Parallel-agent rule
+Until domain boundaries, DB/ledger rules, API contracts, auth and error/idempotency conventions are stable, parallel agents should not invent incompatible contracts inside the same feature area. Parallel work is appropriate when file overlap is low and contracts are stable.
 
-## Codex tasks vs automations vs skills
-
-### Task/thread
-Use for a bounded engineering objective, such as implementing wallet creation or reviewing a pull request.
-
-### Parallel agents
-Use when tasks have stable contracts and low file overlap, for example implementing separate fake provider APIs after their contracts are frozen.
-
-### Skills
-Use reusable skills for repeatable workflows such as code review, CI diagnosis, package-license checks or documentation verification. Skills should encode process, not replace architecture decisions.
-
-### Automations
-Use automations only for recurring work with a clear cadence or trigger, such as periodic issue triage or recurring CI/repository checks. Feature implementation should remain issue/task driven rather than being hidden in an automation.
-
-## Coordination gates
-
-Parallel implementation is allowed only after these are stable enough:
-
-- domain boundaries;
-- database/ledger rules;
-- external API contracts;
-- authentication rules;
-- error/idempotency conventions.
-
-Before those gates, architecture agents may work in parallel on documents, but feature agents should not independently invent incompatible contracts.
-
-## Failure handling
-
-If an agent cannot validate a change because a dependency/environment is unavailable, it must record exactly what was and was not validated. It must not claim tests passed without execution.
-
-If two agent branches conflict semantically, resolve the conflict against `AGENTS.md`, ADRs and the master specification rather than choosing the newest implementation automatically.
-
-## Definition of Done for agent-generated code
-
-A task is complete only when:
-
-- acceptance criteria are met;
-- code builds in the intended environment;
-- relevant tests pass;
-- financial/security invariants remain valid;
-- TR/EN XML documentation is complete;
-- package inventory is current;
-- affected technical/API documentation is current;
-- review findings are resolved or explicitly accepted;
-- commits remain understandable and scoped.
+### DoD
+Agent-generated code is done only when acceptance criteria, build, relevant tests, financial/security invariants, TR/EN XML docs, package inventory and affected TR/EN Markdown docs are complete.
