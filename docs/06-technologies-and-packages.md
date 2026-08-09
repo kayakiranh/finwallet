@@ -61,8 +61,8 @@ Every new package must be added through central package management in `Directory
 | Package | `StackExchange.Redis` |
 | Version | `3.0.17` |
 | License | MIT |
-| Owner project(s) | `FinWallet.Infrastructure` |
-| Purpose | Redis access for OTP state, velocity counters, hot idempotency coordination and other transient distributed state requiring atomic Redis operations. |
+| Owner project(s) | `FinWallet.Api`, `FinWallet.Infrastructure` |
+| Purpose | Redis access for OTP state, velocity counters, hot idempotency coordination and other transient distributed state requiring atomic Redis operations; the API project references it only in the composition root to register the shared connection multiplexer. |
 | Why required | The built-in distributed-cache abstraction does not expose the atomic compare/script primitives required by the planned OTP and concurrency-sensitive transient workflows. |
 | Alternatives considered | `IDistributedCache` alone was rejected for these operations because it intentionally exposes a simpler cache abstraction. Redis remains optional for financial correctness; durable money state is never stored here. |
 | Financial/security impact | Security-sensitive for OTP and rate/velocity state, but never the financial source of truth. Redis unavailability must fail safely for authentication/fraud operations that depend on it. |
