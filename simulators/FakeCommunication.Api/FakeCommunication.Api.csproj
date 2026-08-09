@@ -1,5 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
   <ItemGroup>
     <ProjectReference Include="..\..\src\FinWallet.Shared.Contracts\FinWallet.Shared.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\FinWallet.Shared.Web\FinWallet.Shared.Web.csproj" />
   </ItemGroup>
 </Project>
