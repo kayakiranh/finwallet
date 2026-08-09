@@ -2,7 +2,9 @@
 
 ## Purpose
 
-`FakeBank.Api` and `FakeFraud.Api` simulate third-party providers and intentionally stay outside the FinWallet modular monolith. Their DTO/status vocabularies must later be translated by Infrastructure adapters/anti-corruption layers rather than leaking into FinWallet Domain.
+`FakeBank.Api` and `FakeFraud.Api` simulate third-party providers and intentionally stay outside the FinWallet modular monolith. Their DTO/status vocabularies are translated by Infrastructure adapters/anti-corruption layers rather than leaking into FinWallet Domain.
+
+All HTTP APIs use controller-based ASP.NET Core Web API. Minimal API endpoint mappings are forbidden and all response bodies use `ServiceResult<T>`.
 
 ## FakeBank.Api
 
@@ -19,20 +21,78 @@ FakeBank owns only simulated external-bank state:
 
 FakeBank never writes FinWallet Wallet, Transaction or Ledger state.
 
-### Idempotency rule
+### Controller endpoints
+
+| Method | Route | Purpose |
+|---|---|---|
+| POST | `/api/v1/bank/accounts` | Open a currency-specific external bank account |
+| POST | `/api/v1/bank/accounts/{accountId}/activate` | Finalize a Pending account as Active |
+| POST | `/api/v1/bank/transactions` | Start provider Deposit/Withdrawal |
+| POST | `/api/v1/bank/transactions/{transactionId}/finalize?succeed=true|false` | Complete or fail a Pending provider transaction |
+| GET | `/api/v1/bank/transactions/{transactionId}` | Query provider transaction state |
+| GET | `/api/v1/bank/accounts/{accountId}/statement` | Return completed statement rows for reconciliation |
+
+Every endpoint returns `ServiceResult<T>`.
+
+### Account opening
+
+Example request:
+
+```json
+{
+  "externalCustomerReference": "1fe01029-358d-441f-9bc9-5e6ad8cf0a6c",
+  "currency": "TRY",
+  "requestKey": "account-open-1fe01029-try"
+}
+```
+
+Normal mode creates an Active account. `X-Fake-Mode=pending` creates the provider account in Pending state so asynchronous bank-account opening can be simulated. The account can later be activated through the activate endpoint.
+
+FinWallet must store its own internal `BankAccountId` separately from the provider `AccountId` and IBAN-like value.
+
+### Money movement
+
+A provider Deposit/Withdrawal request contains:
+
+- external `AccountId`;
+- positive amount;
+- matching currency;
+- Deposit or Withdrawal provider transaction type;
+- provider `RequestKey`.
+
+Normal mode applies the provider financial effect once and returns the completed/current result. `X-Fake-Mode=pending` defers the financial effect until explicit finalization.
+
+### Provider idempotency and concurrency
 
 Each write request carries a provider `RequestKey`.
 
 - same key + same normalized payload -> return the original provider result;
 - same key + different payload -> reject as conflict;
+- concurrent first requests with the same key are serialized under an operation-prefixed request-key lock;
+- account state is created before the idempotency record becomes externally observable to a competing request;
+- transaction state is created before the idempotency record becomes externally observable to a competing request;
 - pending requests do not affect external-account balance until provider finalization;
-- repeated finalization of an already-final transaction must not apply the financial effect twice.
+- repeated finalization of an already-final transaction does not apply the financial effect twice;
+- account financial mutations are serialized under an account-specific lock.
 
-The simulator implementation currently keeps provider state in process memory. This is suitable for deterministic local/integration simulation but is not restart-durable. A later test-infrastructure slice may give FakeBank its own persistence if restart durability is needed; FinWallet must never rely on FakeBank in-memory state as its own source of truth.
+This closes the simulator race where a losing concurrent request could previously observe an idempotency record before the referenced account/transaction had been inserted.
+
+The simulator currently keeps provider state in process memory. This is deterministic for local/integration tests but is not restart-durable. FinWallet must never depend on FakeBank in-memory state as its own source of truth.
+
+### Failure simulation
+
+`X-Fake-Mode` supports:
+
+- `fail` -> HTTP 503 ServiceResult failure;
+- `delay` -> approximately two-second provider delay;
+- `timeout` -> long provider delay intended to exercise client timeout/cancellation;
+- `pending` -> asynchronous account/transaction provider state.
+
+Financial POST retries are unsafe unless the same provider `RequestKey` is preserved.
 
 ### Reconciliation statement
 
-Only completed provider transactions appear in account statement data. FinWallet reconciliation will later compare:
+Only completed provider transactions appear in account statement data. FinWallet reconciliation later compares:
 
 - internal external-bank transaction reference;
 - provider transaction identifier;
@@ -71,13 +131,13 @@ Initial examples:
 - >= 75,000 total / 24h -> Review;
 - new device + amount >= 10,000 -> Review;
 - blocked merchant seed -> Deny;
-- simulated high-risk-country seed -> Deny.
+- simulator-only high-risk-country seed -> Deny.
 
 Deny signals take precedence over Review. If no external risk signal exists, result is Allow.
 
 ### Final FinWallet fraud decision
 
-Later FinWallet processing combines:
+FinWallet combines internal and external decisions through an explicit policy:
 
 ```text
 Internal Fraud Rules
@@ -91,14 +151,3 @@ FraudDecisionPolicy
 ```
 
 An external Allow never overrides an internal Deny. External-provider unavailability for security-sensitive financial operations must use the explicit conservative failure policy defined by FinWallet rather than silently treating the transaction as safe.
-
-## Failure simulation
-
-Both external APIs will expose deterministic failure modes at the HTTP boundary:
-
-- `fail`;
-- `delay`;
-- `timeout`;
-- FakeBank additionally supports `pending` asynchronous-provider behavior.
-
-HTTP endpoint wiring is intentionally reviewed separately from provider state/rule models so concurrency/idempotency behavior can be corrected before the simulator becomes callable.
