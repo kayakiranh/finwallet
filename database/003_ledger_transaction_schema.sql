@@ -46,7 +46,8 @@ CREATE TABLE dbo.FinancialTransactions
     Currency TINYINT NOT NULL,
     Amount DECIMAL(19,4) NOT NULL,
     CreatedAt DATETIMEOFFSET(7) NOT NULL,
-    CompletedAt DATETIMEOFFSET(7) NULL,
+    FinalizedAt DATETIMEOFFSET(7) NULL,
+    ReversedAt DATETIMEOFFSET(7) NULL,
     FailureCode NVARCHAR(64) NULL,
     RowVersion ROWVERSION NOT NULL,
 
@@ -60,17 +61,21 @@ CREATE TABLE dbo.FinancialTransactions
     CONSTRAINT CK_FinancialTransactions_Status CHECK (Status IN (1, 2, 3, 4)),
     CONSTRAINT CK_FinancialTransactions_Currency CHECK (Currency IN (1, 2, 3)),
     CONSTRAINT CK_FinancialTransactions_Amount CHECK (Amount > 0),
-    CONSTRAINT CK_FinancialTransactions_Completion CHECK
+    CONSTRAINT CK_FinancialTransactions_Lifecycle CHECK
     (
-        (Status = 1 AND CompletedAt IS NULL)
+        (Status = 1 AND FinalizedAt IS NULL AND ReversedAt IS NULL AND FailureCode IS NULL)
         OR
-        (Status IN (2, 3, 4) AND CompletedAt IS NOT NULL)
+        (Status = 2 AND FinalizedAt IS NOT NULL AND ReversedAt IS NULL AND FailureCode IS NULL)
+        OR
+        (Status = 3 AND FinalizedAt IS NOT NULL AND ReversedAt IS NULL AND FailureCode IS NOT NULL)
+        OR
+        (Status = 4 AND FinalizedAt IS NOT NULL AND ReversedAt IS NOT NULL AND FailureCode IS NULL)
     ),
-    CONSTRAINT CK_FinancialTransactions_Failure CHECK
+    CONSTRAINT CK_FinancialTransactions_Times CHECK
     (
-        (Status = 3 AND FailureCode IS NOT NULL)
-        OR
-        (Status <> 3 AND FailureCode IS NULL)
+        (FinalizedAt IS NULL OR FinalizedAt >= CreatedAt)
+        AND
+        (ReversedAt IS NULL OR (FinalizedAt IS NOT NULL AND ReversedAt >= FinalizedAt))
     ),
     CONSTRAINT CK_FinancialTransactions_WalletTransfer CHECK
     (
@@ -87,7 +92,7 @@ GO
 
 CREATE INDEX IX_FinancialTransactions_Customer_CreatedAt
     ON dbo.FinancialTransactions(CustomerId, CreatedAt DESC)
-    INCLUDE (Type, Status, Currency, Amount, SourceWalletId, DestinationWalletId);
+    INCLUDE (Type, Status, Currency, Amount, SourceWalletId, DestinationWalletId, FinalizedAt);
 GO
 
 CREATE TABLE dbo.IdempotencyRecords
