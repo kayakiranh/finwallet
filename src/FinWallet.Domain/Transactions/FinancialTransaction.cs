@@ -3,8 +3,8 @@ using FinWallet.Domain.Shared;
 namespace FinWallet.Domain.Transactions;
 
 /// <summary>
-/// TR: API request'inden bağımsız durable finansal işlem kimliği, türü, wallet referansları, tutar ve final lifecycle sonucunu temsil eder.
-/// EN: Represents durable financial-operation identity, type, wallet references, amount and final lifecycle outcome independently from an API request.
+/// TR: API request'inden bağımsız durable finansal işlem kimliği, türü, wallet referansları, tutar ve lifecycle sonucunu temsil eder.
+/// EN: Represents durable financial-operation identity, type, wallet references, amount and lifecycle outcome independently from an API request.
 /// </summary>
 public sealed class FinancialTransaction
 {
@@ -13,24 +13,15 @@ public sealed class FinancialTransaction
     {
     }
 
-    /// <summary>
-    /// TR: İki farklı aynı-currency wallet arasındaki yeni Processing transfer transaction'ını oluşturur.
-    /// EN: Creates a new Processing transfer transaction between two distinct wallets in the same currency.
-    /// </summary>
-    /// <param name="id">TR: Durable financial transaction kimliği. EN: Durable financial-transaction identifier.</param>
-    /// <param name="customerId">TR: İşlemi başlatan source-wallet customer kimliği. EN: Source-wallet customer identifier initiating the operation.</param>
-    /// <param name="sourceWalletId">TR: Para çıkacak internal wallet kimliği. EN: Internal wallet identifier being debited.</param>
-    /// <param name="destinationWalletId">TR: Para girecek internal wallet kimliği. EN: Internal wallet identifier being credited.</param>
-    /// <param name="amount">TR: Pozitif currency-aware transfer tutarı. EN: Positive currency-aware transfer amount.</param>
-    /// <param name="createdAt">TR: Transaction oluşturulma UTC zamanı. EN: UTC transaction creation time.</param>
-    /// <returns>TR: Processing durumundaki WalletTransfer aggregate'ini döndürür. EN: Returns a WalletTransfer aggregate in Processing state.</returns>
-    public static FinancialTransaction CreateWalletTransfer(
-        Guid id,
-        Guid customerId,
-        Guid sourceWalletId,
-        Guid destinationWalletId,
-        Money amount,
-        DateTimeOffset createdAt)
+    /// <summary>TR: İki farklı wallet arasındaki yeni Processing transfer transaction'ını oluşturur. EN: Creates a new Processing transfer transaction between two distinct wallets.</summary>
+    /// <param name="id">TR: Durable transaction kimliği. EN: Durable transaction identifier.</param>
+    /// <param name="customerId">TR: Source-wallet customer kimliği. EN: Source-wallet customer identifier.</param>
+    /// <param name="sourceWalletId">TR: Para çıkacak wallet kimliği. EN: Wallet identifier being debited.</param>
+    /// <param name="destinationWalletId">TR: Para girecek wallet kimliği. EN: Wallet identifier being credited.</param>
+    /// <param name="amount">TR: Pozitif currency-aware tutar. EN: Positive currency-aware amount.</param>
+    /// <param name="createdAt">TR: Oluşturulma UTC zamanı. EN: UTC creation time.</param>
+    /// <returns>TR: Processing WalletTransfer aggregate'ini döndürür. EN: Returns a Processing WalletTransfer aggregate.</returns>
+    public static FinancialTransaction CreateWalletTransfer(Guid id, Guid customerId, Guid sourceWalletId, Guid destinationWalletId, Money amount, DateTimeOffset createdAt)
     {
         ValidateCore(id, customerId, amount);
         if (sourceWalletId == Guid.Empty) throw new ArgumentException("Source wallet identifier cannot be empty.", nameof(sourceWalletId));
@@ -50,21 +41,19 @@ public sealed class FinancialTransaction
         };
     }
 
-    /// <summary>
-    /// TR: MSSQL kaydındaki finansal transaction state'ini lifecycle invariant'larını doğrulayarak yeniden oluşturur.
-    /// EN: Rehydrates financial-transaction state from MSSQL while validating lifecycle invariants.
-    /// </summary>
+    /// <summary>TR: MSSQL kaydındaki transaction state'ini lifecycle invariant'larını doğrulayarak yeniden oluşturur. EN: Rehydrates transaction state from MSSQL while validating lifecycle invariants.</summary>
     /// <param name="id">TR: Durable transaction kimliği. EN: Durable transaction identifier.</param>
-    /// <param name="customerId">TR: İşlemi başlatan customer kimliği. EN: Customer identifier that initiated the operation.</param>
+    /// <param name="customerId">TR: İşlemi başlatan customer kimliği. EN: Customer identifier initiating the operation.</param>
     /// <param name="type">TR: Transaction türü. EN: Transaction type.</param>
-    /// <param name="status">TR: Transaction lifecycle durumu. EN: Transaction lifecycle state.</param>
-    /// <param name="sourceWalletId">TR: İsteğe bağlı source wallet kimliği. EN: Optional source-wallet identifier.</param>
-    /// <param name="destinationWalletId">TR: İsteğe bağlı destination wallet kimliği. EN: Optional destination-wallet identifier.</param>
-    /// <param name="amount">TR: Currency-aware transaction tutarı. EN: Currency-aware transaction amount.</param>
+    /// <param name="status">TR: Lifecycle durumu. EN: Lifecycle state.</param>
+    /// <param name="sourceWalletId">TR: İsteğe bağlı source wallet. EN: Optional source wallet.</param>
+    /// <param name="destinationWalletId">TR: İsteğe bağlı destination wallet. EN: Optional destination wallet.</param>
+    /// <param name="amount">TR: Currency-aware tutar. EN: Currency-aware amount.</param>
     /// <param name="createdAt">TR: Oluşturulma UTC zamanı. EN: UTC creation time.</param>
-    /// <param name="completedAt">TR: Final UTC zamanı; Processing ise null. EN: Final UTC time, or null while Processing.</param>
-    /// <param name="failureCode">TR: Failed transaction için güvenli failure code; diğer durumlarda null. EN: Safe failure code for a Failed transaction, otherwise null.</param>
-    /// <returns>TR: Rehydrate edilmiş financial transaction aggregate'ini döndürür. EN: Returns the rehydrated financial-transaction aggregate.</returns>
+    /// <param name="finalizedAt">TR: Completed/Failed ilk final zamanı; Processing ise null. EN: Initial final time for Completed/Failed state, or null while Processing.</param>
+    /// <param name="reversedAt">TR: Reversed transaction için reversal zamanı; diğer durumlarda null. EN: Reversal time for a Reversed transaction, otherwise null.</param>
+    /// <param name="failureCode">TR: Failed durumunda güvenli failure code. EN: Safe failure code in Failed state.</param>
+    /// <returns>TR: Rehydrate edilmiş aggregate'i döndürür. EN: Returns the rehydrated aggregate.</returns>
     public static FinancialTransaction Restore(
         Guid id,
         Guid customerId,
@@ -74,17 +63,14 @@ public sealed class FinancialTransaction
         Guid? destinationWalletId,
         Money amount,
         DateTimeOffset createdAt,
-        DateTimeOffset? completedAt,
+        DateTimeOffset? finalizedAt,
+        DateTimeOffset? reversedAt,
         string? failureCode)
     {
         ValidateCore(id, customerId, amount);
         if (!Enum.IsDefined(type)) throw new ArgumentOutOfRangeException(nameof(type));
         if (!Enum.IsDefined(status)) throw new ArgumentOutOfRangeException(nameof(status));
-        if (status == FinancialTransactionStatus.Processing && completedAt is not null) throw new ArgumentException("Processing transaction cannot have completion time.", nameof(completedAt));
-        if (status != FinancialTransactionStatus.Processing && completedAt is null) throw new ArgumentException("Final transaction must have completion time.", nameof(completedAt));
-        if (completedAt.HasValue && completedAt.Value < createdAt) throw new ArgumentException("Completion time cannot precede creation.", nameof(completedAt));
-        if (status == FinancialTransactionStatus.Failed && string.IsNullOrWhiteSpace(failureCode)) throw new ArgumentException("Failed transaction requires a failure code.", nameof(failureCode));
-        if (status != FinancialTransactionStatus.Failed && !string.IsNullOrWhiteSpace(failureCode)) throw new ArgumentException("Only Failed transaction may carry a failure code.", nameof(failureCode));
+        ValidateLifecycle(status, createdAt, finalizedAt, reversedAt, failureCode);
         if (type == FinancialTransactionType.WalletTransfer &&
             (sourceWalletId is null || destinationWalletId is null || sourceWalletId == destinationWalletId))
         {
@@ -101,7 +87,8 @@ public sealed class FinancialTransaction
             DestinationWalletId = destinationWalletId,
             Amount = amount,
             CreatedAt = createdAt,
-            CompletedAt = completedAt,
+            FinalizedAt = finalizedAt,
+            ReversedAt = reversedAt,
             FailureCode = string.IsNullOrWhiteSpace(failureCode) ? null : failureCode.Trim()
         };
     }
@@ -109,7 +96,7 @@ public sealed class FinancialTransaction
     /// <summary>TR: Durable financial transaction kimliğini döndürür. EN: Gets durable financial-transaction identifier.</summary>
     public Guid Id { get; private set; }
 
-    /// <summary>TR: İşlemi başlatan customer kimliğini döndürür. EN: Gets customer identifier that initiated the operation.</summary>
+    /// <summary>TR: İşlemi başlatan customer kimliğini döndürür. EN: Gets customer identifier initiating the operation.</summary>
     public Guid CustomerId { get; private set; }
 
     /// <summary>TR: Finansal transaction türünü döndürür. EN: Gets financial-transaction type.</summary>
@@ -130,8 +117,11 @@ public sealed class FinancialTransaction
     /// <summary>TR: Transaction oluşturulma UTC zamanını döndürür. EN: Gets transaction UTC creation time.</summary>
     public DateTimeOffset CreatedAt { get; private set; }
 
-    /// <summary>TR: Transaction final UTC zamanını; Processing ise null döndürür. EN: Gets transaction final UTC time, or null while Processing.</summary>
-    public DateTimeOffset? CompletedAt { get; private set; }
+    /// <summary>TR: İlk Completed/Failed final UTC zamanını döndürür ve reversal sonrasında değişmez. EN: Gets the initial Completed/Failed final UTC time and remains unchanged after reversal.</summary>
+    public DateTimeOffset? FinalizedAt { get; private set; }
+
+    /// <summary>TR: Reversal UTC zamanını; transaction terslenmemişse null döndürür. EN: Gets reversal UTC time, or null when the transaction has not been reversed.</summary>
+    public DateTimeOffset? ReversedAt { get; private set; }
 
     /// <summary>TR: Failed transaction failure code'unu; diğer durumlarda null döndürür. EN: Gets failure code for a Failed transaction, otherwise null.</summary>
     public string? FailureCode { get; private set; }
@@ -141,9 +131,9 @@ public sealed class FinancialTransaction
     public void Complete(DateTimeOffset completedAt)
     {
         EnsureProcessing();
-        EnsureFinalTime(completedAt);
+        EnsureTimeNotBeforeCreated(completedAt);
         Status = FinancialTransactionStatus.Completed;
-        CompletedAt = completedAt;
+        FinalizedAt = completedAt;
     }
 
     /// <summary>TR: Processing transaction'ı güvenli failure code ile Failed duruma geçirir. EN: Transitions a Processing transaction into Failed state with a safe failure code.</summary>
@@ -154,20 +144,21 @@ public sealed class FinancialTransaction
         EnsureProcessing();
         ArgumentException.ThrowIfNullOrWhiteSpace(failureCode);
         if (failureCode.Trim().Length > 64) throw new ArgumentOutOfRangeException(nameof(failureCode));
-        EnsureFinalTime(failedAt);
+        EnsureTimeNotBeforeCreated(failedAt);
         Status = FinancialTransactionStatus.Failed;
-        CompletedAt = failedAt;
+        FinalizedAt = failedAt;
         FailureCode = failureCode.Trim();
     }
 
-    /// <summary>TR: Completed transaction'ın etkisinin ayrı reversal ile terslendiğini işaretler. EN: Marks that a Completed transaction effect was reversed by a separate reversal.</summary>
-    /// <param name="reversedAt">TR: Reversal final UTC zamanı. EN: Reversal final UTC time.</param>
+    /// <summary>TR: Completed transaction'ın etkisinin ayrı reversal ile terslendiğini işaretler; original completion zamanını korur. EN: Marks a Completed transaction as reversed by a separate reversal while preserving original completion time.</summary>
+    /// <param name="reversedAt">TR: Reversal UTC zamanı. EN: Reversal UTC time.</param>
     public void MarkReversed(DateTimeOffset reversedAt)
     {
         if (Status != FinancialTransactionStatus.Completed) throw new InvalidOperationException("Only a Completed transaction can be marked Reversed.");
-        EnsureFinalTime(reversedAt);
+        if (FinalizedAt is null) throw new InvalidOperationException("Completed transaction must have a finalization time.");
+        if (reversedAt < FinalizedAt.Value) throw new ArgumentException("Reversal time cannot precede original finalization.", nameof(reversedAt));
         Status = FinancialTransactionStatus.Reversed;
-        CompletedAt = reversedAt;
+        ReversedAt = reversedAt;
     }
 
     /// <summary>TR: Transaction'ın halen Processing olduğunu doğrular. EN: Ensures the transaction is still Processing.</summary>
@@ -176,11 +167,40 @@ public sealed class FinancialTransaction
         if (Status != FinancialTransactionStatus.Processing) throw new InvalidOperationException("Only a Processing transaction can be finalized.");
     }
 
-    /// <summary>TR: Final zamanın create zamanından önce olmadığını doğrular. EN: Ensures final time does not precede creation time.</summary>
-    /// <param name="time">TR: Doğrulanacak final UTC zamanı. EN: Final UTC time to validate.</param>
-    private void EnsureFinalTime(DateTimeOffset time)
+    /// <summary>TR: Zamanın create zamanından önce olmadığını doğrular. EN: Ensures a lifecycle time does not precede creation time.</summary>
+    /// <param name="time">TR: Doğrulanacak UTC zaman. EN: UTC time to validate.</param>
+    private void EnsureTimeNotBeforeCreated(DateTimeOffset time)
     {
-        if (time < CreatedAt) throw new ArgumentException("Final transaction time cannot precede creation time.", nameof(time));
+        if (time < CreatedAt) throw new ArgumentException("Transaction lifecycle time cannot precede creation time.", nameof(time));
+    }
+
+    /// <summary>TR: Restore sırasında lifecycle timestamp/failure invariant'larını doğrular. EN: Validates lifecycle timestamp/failure invariants during Restore.</summary>
+    /// <param name="status">TR: Persisted status. EN: Persisted status.</param>
+    /// <param name="createdAt">TR: Persisted creation time. EN: Persisted creation time.</param>
+    /// <param name="finalizedAt">TR: Persisted initial finalization time. EN: Persisted initial finalization time.</param>
+    /// <param name="reversedAt">TR: Persisted reversal time. EN: Persisted reversal time.</param>
+    /// <param name="failureCode">TR: Persisted failure code. EN: Persisted failure code.</param>
+    private static void ValidateLifecycle(
+        FinancialTransactionStatus status,
+        DateTimeOffset createdAt,
+        DateTimeOffset? finalizedAt,
+        DateTimeOffset? reversedAt,
+        string? failureCode)
+    {
+        if (finalizedAt.HasValue && finalizedAt.Value < createdAt) throw new ArgumentException("Finalization time cannot precede creation.", nameof(finalizedAt));
+        if (reversedAt.HasValue && (!finalizedAt.HasValue || reversedAt.Value < finalizedAt.Value)) throw new ArgumentException("Reversal time cannot precede finalization.", nameof(reversedAt));
+
+        switch (status)
+        {
+            case FinancialTransactionStatus.Processing when finalizedAt is not null || reversedAt is not null || !string.IsNullOrWhiteSpace(failureCode):
+                throw new ArgumentException("Processing transaction cannot carry final lifecycle fields.");
+            case FinancialTransactionStatus.Completed when finalizedAt is null || reversedAt is not null || !string.IsNullOrWhiteSpace(failureCode):
+                throw new ArgumentException("Completed transaction lifecycle fields are inconsistent.");
+            case FinancialTransactionStatus.Failed when finalizedAt is null || reversedAt is not null || string.IsNullOrWhiteSpace(failureCode):
+                throw new ArgumentException("Failed transaction lifecycle fields are inconsistent.");
+            case FinancialTransactionStatus.Reversed when finalizedAt is null || reversedAt is null || !string.IsNullOrWhiteSpace(failureCode):
+                throw new ArgumentException("Reversed transaction lifecycle fields are inconsistent.");
+        }
     }
 
     /// <summary>TR: Ortak transaction kimliği/customer/tutar invariant'larını doğrular. EN: Validates shared transaction identifier/customer/amount invariants.</summary>
