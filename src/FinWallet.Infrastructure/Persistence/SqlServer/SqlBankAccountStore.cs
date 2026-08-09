@@ -7,8 +7,8 @@ using Microsoft.Data.SqlClient;
 namespace FinWallet.Infrastructure.Persistence.SqlServer;
 
 /// <summary>
-/// TR: BankAccount durable lifecycle/provider state'ini explicit parametreli MSSQL komutları ve status compare-and-set güncellemeleriyle saklar.
-/// EN: Stores durable BankAccount lifecycle/provider state with explicit parameterized MSSQL commands and status compare-and-set updates.
+/// TR: BankAccount durable lifecycle/provider state'ini explicit parametreli MSSQL komutları ve snapshot compare-and-set güncellemeleriyle saklar.
+/// EN: Stores durable BankAccount lifecycle/provider state with explicit parameterized MSSQL commands and snapshot compare-and-set updates.
 /// </summary>
 public sealed class SqlBankAccountStore : IBankAccountStore
 {
@@ -71,7 +71,11 @@ public sealed class SqlBankAccountStore : IBankAccountStore
     }
 
     /// <inheritdoc />
-    public async Task<bool> TryUpdateAsync(BankAccount bankAccount, BankAccountStatus expectedStatus, CancellationToken cancellationToken)
+    public async Task<bool> TryUpdateAsync(
+        BankAccount bankAccount,
+        BankAccountStatus expectedStatus,
+        DateTimeOffset expectedUpdatedAt,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(bankAccount);
 
@@ -85,7 +89,8 @@ public sealed class SqlBankAccountStore : IBankAccountStore
               AND CustomerId = @CustomerId
               AND WalletId = @WalletId
               AND Currency = @Currency
-              AND Status = @ExpectedStatus;
+              AND Status = @ExpectedStatus
+              AND UpdatedAt = @ExpectedUpdatedAt;
             """;
 
         await using var connection = _connectionFactory.Create();
@@ -94,6 +99,7 @@ public sealed class SqlBankAccountStore : IBankAccountStore
         AddIdentityParameters(command, bankAccount);
         AddMutableParameters(command, bankAccount);
         command.Parameters.Add("@ExpectedStatus", SqlDbType.TinyInt).Value = (byte)expectedStatus;
+        command.Parameters.Add("@ExpectedUpdatedAt", SqlDbType.DateTimeOffset).Value = expectedUpdatedAt;
 
         var affectedRows = await command.ExecuteNonQueryAsync(cancellationToken);
         return affectedRows == 1;
