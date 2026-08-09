@@ -1,0 +1,70 @@
+name: FinWallet Docker CI
+
+on:
+  push:
+    branches:
+      - main
+      - 'agent/**'
+    paths:
+      - 'compose.yml'
+      - 'compose.debug.yml'
+      - 'compose.production.yml'
+      - '.dockerignore'
+      - '.env.example'
+      - 'docker/**'
+      - 'src/**'
+      - 'simulators/**'
+      - 'Directory.Build.props'
+      - 'Directory.Packages.props'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'compose.yml'
+      - 'compose.debug.yml'
+      - 'compose.production.yml'
+      - '.dockerignore'
+      - '.env.example'
+      - 'docker/**'
+      - 'src/**'
+      - 'simulators/**'
+      - 'Directory.Build.props'
+      - 'Directory.Packages.props'
+
+permissions:
+  contents: read
+
+jobs:
+  docker-validate-build:
+    name: Validate Compose and build application images
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Create CI environment file
+        run: cp .env.example .env
+
+      - name: Validate default Compose model
+        run: docker compose --env-file .env -f compose.yml config --quiet
+
+      - name: Validate debug overlay
+        run: docker compose --env-file .env -f compose.yml -f compose.debug.yml config --quiet
+
+      - name: Validate production-like overlay
+        run: docker compose --env-file .env -f compose.yml -f compose.production.yml config --quiet
+
+      - name: Build all .NET service images
+        env:
+          DOCKER_BUILDKIT: "1"
+          COMPOSE_DOCKER_CLI_BUILD: "1"
+        run: >-
+          docker compose --env-file .env -f compose.yml build
+          gateway
+          finwallet-api
+          fake-bank
+          fake-fraud
+          fake-cutoff
+          fake-campaign
+          fake-communication
