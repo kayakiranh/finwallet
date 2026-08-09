@@ -11,23 +11,18 @@ namespace FinWallet.Api.Endpoints;
 public static class AuthenticationEndpoints
 {
     /// <summary>
-    /// TR: Registration, OTP verification, login ve refresh endpoint'lerini `/api/v1/auth` route grubu altında kaydeder.
-    /// EN: Registers registration, OTP verification, login and refresh endpoints under the `/api/v1/auth` route group.
+    /// TR: Registration, OTP resend/verification, login ve refresh endpoint'lerini `/api/v1/auth` route grubu altında kaydeder.
+    /// EN: Registers registration, OTP resend/verification, login and refresh endpoints under the `/api/v1/auth` route group.
     /// </summary>
-    /// <param name="endpoints">
-    /// TR: Endpoint route'larının ekleneceği ASP.NET Core route builder.
-    /// EN: ASP.NET Core route builder to which endpoint routes are added.
-    /// </param>
-    /// <returns>
-    /// TR: Ek endpoint tanımları için aynı route builder örneğini döndürür.
-    /// EN: Returns the same route builder instance for additional endpoint registration.
-    /// </returns>
+    /// <param name="endpoints">TR: Endpoint route'larının ekleneceği ASP.NET Core route builder. EN: ASP.NET Core route builder to which endpoint routes are added.</param>
+    /// <returns>TR: Ek endpoint tanımları için aynı route builder örneğini döndürür. EN: Returns the same route builder instance for additional endpoint registration.</returns>
     public static IEndpointRouteBuilder MapAuthenticationEndpoints(this IEndpointRouteBuilder endpoints)
     {
         ArgumentNullException.ThrowIfNull(endpoints);
 
         var group = endpoints.MapGroup("/api/v1/auth");
         group.MapPost("/register", RegisterAsync);
+        group.MapPost("/registration/resend-otp", ResendRegistrationOtpAsync);
         group.MapPost("/registration/verify", VerifyRegistrationOtpAsync);
         group.MapPost("/login", LoginAsync);
         group.MapPost("/refresh", RefreshAsync);
@@ -36,14 +31,14 @@ public static class AuthenticationEndpoints
     }
 
     /// <summary>
-    /// TR: HTTP registration request'ini Application command'a çevirir ve pending müşteri/OTP expiration sonucunu 202 Accepted olarak döndürür.
-    /// EN: Converts the HTTP registration request into an Application command and returns the pending-customer/OTP-expiration result as HTTP 202 Accepted.
+    /// TR: HTTP registration request'ini Application command'a çevirir ve durable pending müşteri ile ilk OTP delivery sonucunu 202 Accepted olarak döndürür.
+    /// EN: Converts the HTTP registration request into an Application command and returns the durable pending customer plus initial OTP-delivery outcome as HTTP 202 Accepted.
     /// </summary>
     /// <param name="request">TR: API registration request gövdesi. EN: API registration request body.</param>
     /// <param name="handler">TR: Registration use-case handler'ı. EN: Registration use-case handler.</param>
     /// <param name="httpContext">TR: Request correlation kimliğini sağlayan HTTP context. EN: HTTP context providing the request correlation identifier.</param>
     /// <param name="cancellationToken">TR: İstek bağlantısı kesildiğinde use-case'e taşınan iptal sinyali. EN: Cancellation signal propagated to the use case when the request is aborted.</param>
-    /// <returns>TR: Pending müşteri bilgisini içeren 202 Accepted sonucu döndürür. EN: Returns HTTP 202 Accepted containing pending-customer information.</returns>
+    /// <returns>TR: Pending müşteri ve OTP delivery bilgisini içeren 202 Accepted sonucu döndürür. EN: Returns HTTP 202 Accepted containing pending-customer and OTP-delivery information.</returns>
     private static async Task<IResult> RegisterAsync(
         RegisterCustomerRequest request,
         RegisterCustomerHandler handler,
@@ -52,16 +47,47 @@ public static class AuthenticationEndpoints
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var command = new RegisterCustomerCommand(
-            request.CountryCode,
-            request.PhoneNumber,
-            request.Email,
-            request.Password,
-            httpContext.TraceIdentifier);
+        var result = await handler.HandleAsync(
+            new RegisterCustomerCommand(
+                request.CountryCode,
+                request.PhoneNumber,
+                request.Email,
+                request.Password,
+                httpContext.TraceIdentifier),
+            cancellationToken);
 
-        var result = await handler.HandleAsync(command, cancellationToken);
         return Results.Accepted(
-            value: new RegisterCustomerResponse(result.CustomerId, result.OtpExpiresAt));
+            value: new RegisterCustomerResponse(
+                result.CustomerId,
+                result.OtpExpiresAt,
+                result.OtpDeliverySucceeded));
+    }
+
+    /// <summary>
+    /// TR: Pending müşteri için yeni OTP challenge üretir ve SMS provider'a resend işlemini başlatır.
+    /// EN: Issues a new OTP challenge for a pending customer and initiates resend through the SMS provider.
+    /// </summary>
+    /// <param name="request">TR: Pending müşteri kimliğini taşıyan resend request. EN: Resend request carrying the pending-customer identifier.</param>
+    /// <param name="handler">TR: Registration OTP resend use-case handler'ı. EN: Registration-OTP resend use-case handler.</param>
+    /// <param name="httpContext">TR: Provider çağrısına taşınacak correlation kimliğini sağlayan HTTP context. EN: HTTP context providing the correlation identifier propagated to the provider call.</param>
+    /// <param name="cancellationToken">TR: İstek iptal sinyali. EN: Request cancellation signal.</param>
+    /// <returns>TR: Yeni OTP expiration ve delivery sonucunu içeren 200 OK döndürür. EN: Returns HTTP 200 OK containing the new OTP expiration and delivery outcome.</returns>
+    private static async Task<IResult> ResendRegistrationOtpAsync(
+        ResendRegistrationOtpRequest request,
+        ResendRegistrationOtpHandler handler,
+        HttpContext httpContext,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var result = await handler.HandleAsync(
+            new ResendRegistrationOtpCommand(request.CustomerId, httpContext.TraceIdentifier),
+            cancellationToken);
+
+        return Results.Ok(
+            new RegistrationOtpDeliveryResponse(
+                result.OtpExpiresAt,
+                result.OtpDeliverySucceeded));
     }
 
     /// <summary>
