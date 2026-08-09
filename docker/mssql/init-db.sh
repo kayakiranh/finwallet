@@ -20,6 +20,7 @@ SQLCMD_COMMON=(
   -C
   -b
   -l 30
+  -I
 )
 
 run_query() {
@@ -30,6 +31,8 @@ echo "Ensuring FinWallet database exists..."
 run_query -d master -Q "IF DB_ID(N'FinWallet') IS NULL CREATE DATABASE [FinWallet];"
 
 run_query -d FinWallet -Q "
+SET ANSI_NULLS ON;
+SET QUOTED_IDENTIFIER ON;
 IF OBJECT_ID(N'dbo.SchemaVersions', N'U') IS NULL
 BEGIN
     CREATE TABLE dbo.SchemaVersions
@@ -52,7 +55,7 @@ apply_migration() {
   fi
 
   echo "Applying migration ${version}: ${file}"
-  run_query -d FinWallet -i "/database/${file}"
+  run_query -d FinWallet -Q "SET ANSI_NULLS ON; SET QUOTED_IDENTIFIER ON;" -i "/database/${file}"
   run_query -d FinWallet -Q "INSERT INTO dbo.SchemaVersions (Version) VALUES ('${version}');"
 }
 
