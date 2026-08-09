@@ -1,25 +1,21 @@
-# External Integrations
+# Harici Entegrasyonlar / External Integrations
 
-## Integration principles
+## Türkçe
 
-FinWallet treats every simulator as an external provider even though the simulator source lives in the same repository.
+### Entegrasyon ilkeleri
+FinWallet simulator source code'ları aynı repository'de olsa bile her simulatorı external provider gibi ele alır.
 
-Rules:
+Kurallar:
+- provider servisleri controller-based ASP.NET Core API'dir;
+- success/failure body'leri `ServiceResult<T>` kullanır;
+- FinWallet provider storage'ını doğrudan okumaz/yazmaz;
+- provider DTO/enumları Infrastructure anti-corruption adapter'ları arkasında kalır;
+- internal ve provider ID'leri ayrı tutulur;
+- external HTTP financial SQL transaction açıkken çalışmaz;
+- retry yalnız operation-level idempotency güvenliyse yapılır;
+- normal provider çağrıları YARP Gateway üzerinden gider.
 
-- provider services are controller-based ASP.NET Core APIs;
-- provider success/failure bodies use `ServiceResult<T>`;
-- FinWallet never reads provider storage directly;
-- provider DTOs/enums remain behind Infrastructure anti-corruption adapters;
-- internal and provider identifiers remain separate;
-- external HTTP does not execute while a FinWallet financial SQL transaction is held open;
-- retries are operation-specific and must preserve idempotency;
-- provider timeout/fail-open/fail-closed behavior is explicit;
-- normal FinWallet provider calls go through YARP Gateway rather than directly to simulator hosts.
-
-## Gateway provider routes
-
-FinWallet adapters use these configured base paths:
-
+### Gateway provider rotaları
 ```text
 /providers/bank/
 /providers/fraud/
@@ -28,166 +24,146 @@ FinWallet adapters use these configured base paths:
 /providers/communication/
 ```
 
-Local default:
+Local default: `http://localhost:8080/providers/...`.
 
-```text
-http://localhost:8080/providers/...
-```
+FinWallet.Api Gateway'e `X-Internal-Service-Key` ile gider. Gateway bu credential'ı doğrular, destination request'te ayrı `DownstreamServiceKey` kullanır. Provider business endpoint'i downstream key yoksa doğrudan çağrıyı reddeder.
 
-Production default service DNS:
-
-```text
-http://finwallet-gateway:8080/providers/...
-```
-
-### Two-stage service authentication
-
-FinWallet -> Gateway uses `FinWallet:Gateway:InternalServiceKey` in `X-Internal-Service-Key`.
-
-Gateway validates that credential using its `InternalService` authorization policy. Before proxying, YARP replaces the request header with `Gateway:Security:DownstreamServiceKey`.
-
-Destination services require the downstream key for business endpoints. Therefore direct pod/service calls without the Gateway credential are rejected.
-
-Health endpoints remain open for health checks. Swagger is controlled by environment configuration.
-
-## HttpClient policy
-
-Provider adapters use HttpClientFactory and a shared `SocketsHttpHandler` baseline:
-
-- configurable provider timeout;
-- configurable max connections per server;
-- configurable pooled connection lifetime;
-- configurable pooled idle timeout;
+### HttpClient politikası
+Provider adapterları `HttpClientFactory` + `SocketsHttpHandler` kullanır:
+- provider-specific timeout;
+- max connections per server;
+- pooled connection lifetime/idle timeout;
 - GZip/Deflate/Brotli decompression;
 - cookies disabled;
-- internal service header injected by a delegating handler.
+- internal service header delegating handler.
 
-Automatic retries are deliberately not added to arbitrary financial POSTs. A timeout does not prove that a remote side effect did not occur.
+Arbitrary financial POST'a otomatik retry eklenmez; timeout remote side-effect oluşmadığını kanıtlamaz.
 
-## FakeCommunication.Api
-
-Responsibility: simulated SMS/communication provider.
-
-Primary endpoint:
-
+### FakeCommunication.Api
+SMS/communication simulatorıdır. Ana endpoint:
 ```text
 POST /api/v1/communication/sms
 ```
-
-FinWallet calls it through:
-
+FinWallet route:
 ```text
 POST /providers/communication/api/v1/communication/sms
 ```
+OTP body sensitive'dir ve production loglarına yazılmaz. Fake mode ile failure/delay/timeout senaryoları simüle edilebilir.
 
-OTP message bodies are sensitive and must never appear in production logs.
+### FakeBank.Api
+Provider-side account/transaction state'ini sahiplenir; FinWallet Wallet/Ledger tablolarını değiştirmez.
 
-`X-Fake-Mode` supports failure/delay/timeout simulation where implemented.
+Desteklenen provider kavramları:
+- account opening/read/activation/pending;
+- deposit/withdrawal-like transaction start/finalize/read;
+- statement data for reconciliation;
+- stable provider request key ile duplicate protection.
 
-`FakeCommunicationGateway` owns the provider DTO mapping and correlation propagation.
+`IBankProvider` Application portudur; `FakeBankProvider` Infrastructure adapterıdır. Adapter provider envelope/enum/currency map eder, correlation taşır ve unsafe automatic financial retry yapmaz.
 
-## FakeBank.Api
-
-FakeBank owns provider-side account/transaction state. It never mutates FinWallet Wallet/Ledger tables.
-
-Implemented provider concepts include:
-
-- open account;
-- read account state;
-- activate/pending account simulation;
-- start deposit/withdrawal provider transaction;
-- finalize transaction;
-- read transaction state;
-- account statement for reconciliation.
-
-Provider write requests use stable request keys so:
-
-- same key + same normalized payload returns original result;
-- same key + different payload conflicts;
-- concurrent first use is serialized provider-side;
-- repeated finalization does not apply an effect twice.
-
-### FinWallet bank adapter
-
-`IBankProvider` is Application-owned. `FakeBankProvider` is Infrastructure-owned.
-
-Adapter responsibilities:
-
-- unwrap provider envelope;
-- map provider enums/currency;
-- propagate correlation;
-- validate provider identity state in the use case;
-- classify retryable/non-retryable provider failures;
-- never automatically retry a financial POST.
-
-Bank-account opening stores durable internal `BankAccount(Opening)` before provider HTTP and derives deterministic provider RequestKey from the internal BankAccount ID.
-
-## FakeFraud.Api
-
-External fraud remains independent from FinWallet internal rules.
-
-Provider endpoint:
-
-```text
-POST /api/v1/fraud/evaluate
-```
-
-FinWallet route:
-
+### FakeFraud.Api
+Internal fraud kurallarından bağımsız external fraud provider simulatorıdır.
 ```text
 POST /providers/fraud/api/v1/fraud/evaluate
 ```
+Request'e server-derived risk signals gider. Raw device ID yerine stable hashed reference kullanılır. Transfer için external fraud zorunludur; timeout/network/malformed response fail-closed davranır.
 
-The request receives only server-derived non-PII risk signals. Raw device ID is not sent; the risk store derives a stable hashed device reference.
+### FakeCutoff.Api
+Bank/currency/transaction-type için simulated business calendar/cutoff/settlement hesaplar. Özellikle BankDeposit ve BankWithdrawal akışları için planlanmıştır. Simulated holiday datası legal production source değildir.
 
-External fraud is mandatory for transfer decisions after internal rules unless internal fraud already returned Deny. Timeout/network/malformed provider response is fail-closed and prevents financial posting.
+### FakeCampaign.Api
+Campaign eligibility/discount/sponsor calculation yapabilir. Muhasebe etkisini balanced ledger ile uygulama sorumluluğu FinWallet'a aittir.
 
-## FakeCutoff.Api
+### Health ve load balancing
+YARP clusterları configuration-driven destination ve `PowerOfTwoChoices` kullanır. Critical provider clusterlarında active health checks; ana FinWallet clusterında passive transport-failure health de vardır.
 
-Provider endpoint:
+### SSRF / unsafe upstream önleme
+Client arbitrary provider URL gönderemez. Provider destination'ları server-owned YARP/config değerleridir. Böylece normal request payload'ı uygulamayı user-controlled URL'e HTTP çağrısı yapan SSRF primitive'ine dönüştüremez.
 
+### Production network kuralı
+Application-level downstream key direct-bypass riskini azaltır; production'da backend/provider servisleri ayrıca network policy/ingress ile public routable olmamalıdır.
+
+---
+
+## English
+
+### Integration principles
+FinWallet treats every simulator as an external provider even though simulator source code lives in the same repository.
+
+Rules:
+- provider services are controller-based ASP.NET Core APIs;
+- success/failure bodies use `ServiceResult<T>`;
+- FinWallet never reads or writes provider storage directly;
+- provider DTOs/enums stay behind Infrastructure anti-corruption adapters;
+- internal and provider identifiers remain separate;
+- external HTTP does not run while a financial SQL transaction is open;
+- retries are used only when operation-level idempotency makes them safe;
+- normal provider calls pass through YARP Gateway.
+
+### Gateway provider routes
 ```text
-POST /api/v1/cutoffs/evaluate
+/providers/bank/
+/providers/fraud/
+/providers/cutoff/
+/providers/campaign/
+/providers/communication/
 ```
 
-Gateway route:
+Local default: `http://localhost:8080/providers/...`.
 
+FinWallet.Api calls the Gateway with `X-Internal-Service-Key`. Gateway validates that credential and uses a separate `DownstreamServiceKey` on the destination request. Provider business endpoints reject direct calls without the downstream key.
+
+### HttpClient policy
+Provider adapters use `HttpClientFactory` + `SocketsHttpHandler` with:
+- provider-specific timeout;
+- max connections per server;
+- pooled connection lifetime/idle timeout;
+- GZip/Deflate/Brotli decompression;
+- cookies disabled;
+- internal-service-header delegating handler.
+
+Arbitrary financial POSTs are not automatically retried because a timeout does not prove that the remote side effect did not happen.
+
+### FakeCommunication.Api
+Simulates SMS/communication. Primary endpoint:
 ```text
-/providers/cutoff/*
+POST /api/v1/communication/sms
 ```
-
-It owns simulated banking calendars/business-hour/cutoff interpretation. Current holiday/calendar data is deterministic simulator data and is not a legal production calendar source.
-
-This integration is intended for the BankDeposit/BankWithdrawal flow.
-
-## FakeCampaign.Api
-
-Provider endpoint:
-
+FinWallet route:
 ```text
-POST /api/v1/campaigns/evaluate
+POST /providers/communication/api/v1/communication/sms
 ```
+OTP bodies are sensitive and must not be logged in production. Fake modes can simulate failure, delay and timeout.
 
-Gateway route:
+### FakeBank.Api
+Owns provider-side account/transaction state and never mutates FinWallet Wallet/Ledger tables.
 
+Supported provider concepts include:
+- account opening/read/activation/pending;
+- deposit/withdrawal-like transaction start/finalize/read;
+- statement data for reconciliation;
+- duplicate protection through stable provider request keys.
+
+`IBankProvider` is the Application port and `FakeBankProvider` the Infrastructure adapter. The adapter maps envelopes/enums/currency, propagates correlation and does not perform unsafe automatic financial retries.
+
+### FakeFraud.Api
+Independent external-fraud simulator.
 ```text
-/providers/campaign/*
+POST /providers/fraud/api/v1/fraud/evaluate
 ```
+Requests contain server-derived risk signals. Raw device ID is replaced with a stable hashed reference. External fraud is mandatory for transfer when required; timeout/network/malformed responses fail closed.
 
-Campaign provider may calculate eligibility/discount/sponsor identity. FinWallet remains responsible for accounting the resulting economic effect through a balanced ledger.
+### FakeCutoff.Api
+Simulates business-calendar/cutoff/settlement calculations by bank, currency and transaction type. It is mainly planned for BankDeposit and BankWithdrawal. Simulated holiday data is not a legal production source.
 
-## Health and load balancing
+### FakeCampaign.Api
+May calculate campaign eligibility, discount and sponsor identity. FinWallet remains responsible for representing the economic effect in a balanced ledger.
 
-YARP clusters use configuration-driven destinations and `PowerOfTwoChoices`. Development has one destination per service. Production can add replicas without source-code changes.
+### Health and load balancing
+YARP clusters use configuration-driven destinations and `PowerOfTwoChoices`. Critical provider clusters use active health checks; the main FinWallet cluster also has passive transport-failure health handling.
 
-Critical provider clusters have active health checks. FinWallet's main API cluster additionally uses passive transport-failure health handling.
+### SSRF / unsafe upstream prevention
+Clients cannot provide arbitrary provider URLs. Provider destinations are server-owned YARP/config values, so normal request payloads cannot turn the application into an HTTP client for user-controlled URLs.
 
-## SSRF / unsafe upstream prevention
-
-Clients cannot pass an arbitrary provider URL. Provider destinations come only from server-owned configuration/YARP clusters.
-
-A client payload therefore cannot turn a normal financial request into `HttpClient.GetAsync(userProvidedUrl)`.
-
-## Direct access rule
-
-The simulator ports exist for local debugging and health/Swagger inspection. Business integration traffic is considered valid only through Gateway trust boundaries. Production network policy should additionally make backend services non-publicly routable.
+### Production network rule
+Application-level downstream keys reduce direct-bypass risk, but production backend/provider services should additionally be non-publicly-routable through network policy/ingress controls.
