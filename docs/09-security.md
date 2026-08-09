@@ -1,228 +1,239 @@
-# Security Design
+# Güvenlik Tasarımı / Security Design
 
-## Security principles
+## Türkçe
 
-FinWallet prioritizes financial correctness, least privilege and credential safety over convenience.
+### Temel ilkeler
+- Financial correctness, least privilege ve credential safety önceliklidir.
+- Normal HTTP trafik YARP Gateway üzerinden geçer.
+- Gateway auth, service/domain authorization'ın yerine geçmez.
+- MSSQL durable authentication/financial source of truth'tür.
+- Redis transient support state'tir.
+- Production secret değerleri source control'da tutulmaz ve gerekli secret yoksa startup fail-fast olur.
+- Password, OTP, JWT, refresh token, service key ve connection secret loglanmaz.
+- Ownership/risk facts server-side türetilir.
 
-- All normal HTTP traffic passes through YARP Gateway.
-- Gateway authentication does not replace service/domain authorization.
-- MSSQL is the durable authentication/financial source of truth.
-- Redis is transient support only.
-- Secrets are not committed in production configuration.
-- Production starts fail-fast when required secrets are absent.
-- Passwords, OTPs, JWTs, refresh tokens, service keys and connection secrets must never be logged.
-- Financial ownership/risk facts are server-derived, not trusted from client request flags.
-- Cryptographic algorithms and accounting invariants are not arbitrary runtime toggles.
+### Gateway trust modeli
+**Client -> Gateway:** Protected `/api/*` rotalarında JWT gerekir; register/verify/login/refresh anonymous'dur.
 
-## Gateway trust model
+**Gateway -> FinWallet.Api:** Gateway downstream service key taşır; API JWT ve ownership'i yeniden doğrular.
 
-### Public/customer boundary
+**FinWallet.Api -> Gateway `/providers/*`:** `InternalServiceKey` gerekir.
 
-YARP Gateway is the public application entry point.
+**Gateway -> Fake provider:** Ayrı `DownstreamServiceKey` gerekir.
 
-Anonymous routes are limited to registration verification/login/refresh endpoints. Other `/api/*` routes require a valid JWT at the Gateway before a request is proxied.
+Health route'ları orchestrator/YARP health check için açıktır; Swagger exposure environment config ile yönetilir.
 
-FinWallet.Api validates the JWT again and high-risk financial flows validate server-side session state (`sid`) against MSSQL.
-
-### Internal provider boundary
-
-FinWallet.Api calls provider simulators through Gateway `/providers/*` routes with an `InternalServiceKey`.
-
-Gateway validates the caller key, then replaces it on the downstream proxy request with a distinct `DownstreamServiceKey`.
-
-FinWallet.Api and simulator business endpoints require the downstream key. This prevents a direct call to a backend service from being treated as equivalent to traffic that passed through the Gateway.
-
-Health endpoints are exempt so the gateway/orchestrator can check liveness. Swagger exposure is separately controlled by environment configuration.
-
-## HTTP attack-surface controls
-
-The shared `FinWallet.Shared.Web` baseline applies:
-
-- Kestrel server header disabled;
+### HTTP attack surface
+`FinWallet.Shared.Web`:
+- Kestrel server header kapalı;
 - TRACE/CONNECT blocked;
-- body-bearing POST/PUT/PATCH restricted to JSON;
-- body-size limits;
-- header-count and total-header-size limits;
-- request-header timeout;
-- keep-alive timeout;
-- maximum concurrent connection limit;
-- per-IP fixed-window rate limiting;
-- zero queue by default;
-- explicit CORS origin allow-list;
-- validated/bounded correlation ID;
-- no-store/no-cache responses;
-- restrictive CSP;
-- clickjacking protection;
-- MIME-sniffing protection;
-- restrictive referrer/permissions/cross-origin policies.
+- body-bearing POST/PUT/PATCH JSON zorunlu;
+- body/header count/header size limits;
+- request-header/keep-alive timeout;
+- max concurrent connections;
+- per-IP fixed-window rate limit;
+- queue default 0;
+- CORS allow-list;
+- bounded correlation ID;
+- no-store/no-cache;
+- CSP, frame/MIME/referrer/permissions/cross-origin headers.
 
-These controls reduce L7 abuse/resource exhaustion. They are not a replacement for volumetric DDoS protection at cloud/edge/ingress/WAF layers.
+Bu kontroller L7 abuse/resource exhaustion azaltır; volumetric DDoS için cloud/edge/ingress/WAF gerekir.
 
-## Registration country policy
-
-Registration uses an explicit allow-list. The selected country and normalized phone calling code must agree. Normalized phone is unique in MSSQL, so concurrent registrations cannot create duplicate customers even if both pass an application pre-check.
-
-## Password policy and storage
-
-Passwords are never stored raw.
-
-Current V1 credential scheme:
-
+### Password
+V1:
 - PBKDF2-HMAC-SHA512;
 - 220,000 iterations;
 - 32-byte random salt;
-- 64-byte derived hash;
+- 64-byte hash;
 - constant-time comparison;
 - persisted hash version.
 
-The work factor is intentionally not a simple appsettings switch. The current credential schema stores a hash version, not per-credential iteration metadata. Changing the iteration count at runtime would make existing hashes unverifiable. Future work-factor changes require a versioned migration/rehash strategy.
+Iteration count loose runtime tuning değildir; future change versioned migration/rehash gerektirir.
 
-## JWT access tokens
+### JWT ve session
+JWT fixed HMAC-SHA256 kullanır; minimal `sub`, `sid`, JTI, iat claim'leri taşır. Balance/IBAN/contact içermez. Issuer/audience/signing key config/secret store'dan gelir. Lifetime güvenli bir aralıkta config edilebilir. Signing algorithm config edilemez.
 
-JWTs:
+High-risk transfer `sid` değerini MSSQL CustomerSession ile doğrular; revoke edilmiş session kısa ömürlü JWT bitmeden de para hareketini durdurabilir.
 
-- use fixed HMAC-SHA256 signing;
-- contain only minimal subject/session/JTI/issued-at claims;
-- do not contain balance/IBAN/contact data;
-- use issuer/audience/signing key from configuration/secret store;
-- use an access-token lifetime configurable only within a safe 2-30 minute range;
-- use bounded configurable validation clock skew.
+### Refresh token
+Opaque random token client'a verilir; raw token DB'ye yazılmaz. Rotation compare-and-set ile single-use'dur. Consumed token reuse session/token family revoke eder.
 
-The signing algorithm itself is not configurable.
+### OTP
+Redis'te raw OTP yerine HMAC digest tutulur. Lua script atomic issue/attempt/consume davranışı sağlar. Redis unavailable ise verification fail-closed olur.
 
-## Sessions and refresh tokens
+### SQL injection
+Financial/auth persistence parameterized SqlClient command kullanır. Request text dynamic SQL fragment olarak kullanılmaz.
 
-A login creates a server-side device session. Refresh tokens are opaque random values; only their deterministic hash is persisted.
+### BOLA / ownership
+- customer identity JWT `sub`'dan gelir;
+- owned resource query'leri customer boundary içerir;
+- transfer source ownership fraud öncesi ve locked posting içinde tekrar doğrulanır;
+- destination/currency/lifecycle commit öncesi revalidate edilir.
 
-Rotation uses MSSQL compare-and-set semantics. Reuse of an already consumed refresh token revokes the associated session/token family.
-
-High-risk money flows validate the `sid` claim against durable session state, so a valid JWT alone is not sufficient after the server-side session has been revoked.
-
-## OTP in Redis
-
-Registration OTP state is transient and stored in Redis.
-
-- raw OTP is not stored in Redis;
-- digest uses HMAC with deployment pepper;
-- issue/verify operations use Lua for atomic state changes;
-- verification fails closed when Redis is unavailable;
-- Redis cannot independently activate a customer without durable MSSQL state.
-
-## SQL injection and data access
-
-Financial/authentication persistence uses explicit parameterized `Microsoft.Data.SqlClient` commands. User values are not concatenated into SQL in financial paths.
-
-Dynamic SQL is only acceptable when the dynamic fragment is a fixed code-owned constant, never request text.
-
-## Financial authorization
-
-Ownership is enforced server-side:
-
-- JWT subject determines current customer;
-- queries include customer ownership when loading owned wallets/bank accounts;
-- another customer's wallet is not treated as an authorized resource merely because its GUID is known;
-- transfer source ownership is validated before fraud and again inside locked posting SQL;
-- destination/currency/lifecycle are revalidated inside the atomic posting transaction.
-
-This is a direct control against BOLA/IDOR-style failures.
-
-## Fraud security
-
-Transfer clients do not submit trust flags such as `isNewDevice`, `knownBeneficiary`, velocity or 24-hour amount.
-
-Signals are derived from server-side session/customer/transaction state.
-
-Processing order:
+### Fraud güvenliği
+Client `isNewDevice`, known beneficiary, velocity veya 24h amount gibi trust flag gönderemez. Bu sinyaller durable server state'ten üretilir.
 
 ```text
-completed idempotency replay
+completed replay
 -> server-side risk signals
--> internal fraud rules
--> external fraud provider
+-> internal fraud
+-> external fraud
 -> combined decision
--> atomic posting only on Allow
+-> posting only on Allow
 ```
+External fraud unavailable/malformed ise fail-closed.
 
-External fraud timeout/network/malformed response fails closed. No money is posted when the required fraud decision is unavailable.
+### Idempotency / replay
+Money-changing transfer `Idempotency-Key` ister. Durable identity `Scope + CustomerId + Key`; canonical request hash same-key/different-payload kullanımını conflict yapar.
 
-## Idempotency and replay protection
+### Logging
+Asla loglanmaz:
+- password/hash/salt;
+- OTP/digest/pepper;
+- JWT/refresh token;
+- Authorization header;
+- internal/downstream keys;
+- signing key;
+- credential içeren SQL/Redis connection strings;
+- unmasked phone/email/IBAN/account.
 
-Money-changing transfer requests require `Idempotency-Key`.
+### OWASP/API security özeti
+- Broken Access Control/BOLA: gateway+service auth, owner-aware SQL.
+- Authentication failures: JWT/session/refresh rotation/login lockout/OTP/rate limit.
+- Injection: parameterized SQL.
+- Security Misconfiguration: prod Swagger off, bounded HTTP config, no server header.
+- Cryptographic failures: PBKDF2, HMAC, short JWT, secret management.
+- Sensitive business flows: durable idempotency, fraud, ledger.
+- Resource consumption: rate/body/header/connection/timeouts.
+- SSRF/unsafe API consumption: provider URLs server-owned config'tir.
+- Supply chain: central package versions, CI build/test; SBOM/vulnerability scan halen açık iştir.
 
-Durable identity:
+### Kalan security işleri
+- Gateway bypass/rate limit integration tests;
+- dependency vulnerability/SBOM scanning;
+- centralized masked logging/SIEM/alerting;
+- NetworkPolicy/ingress/TLS hardening;
+- logout/session-revoke endpoint;
+- durable FraudEvents/manual review;
+- incident/reconciliation runbooks.
+
+---
+
+## English
+
+### Core principles
+- Financial correctness, least privilege and credential safety take priority.
+- Normal HTTP traffic passes through YARP Gateway.
+- Gateway authentication does not replace service/domain authorization.
+- MSSQL is the durable authentication/financial source of truth.
+- Redis is transient support state.
+- Production secrets are not committed and startup fails fast when required secrets are absent.
+- Passwords, OTPs, JWTs, refresh tokens, service keys and connection secrets are never logged.
+- Ownership/risk facts are server-derived.
+
+### Gateway trust model
+**Client -> Gateway:** protected `/api/*` routes require JWT; register/verify/login/refresh are anonymous.
+
+**Gateway -> FinWallet.Api:** Gateway supplies a downstream service key; the API independently revalidates JWT and ownership.
+
+**FinWallet.Api -> Gateway `/providers/*`:** requires `InternalServiceKey`.
+
+**Gateway -> Fake provider:** requires a separate `DownstreamServiceKey`.
+
+Health routes remain open for orchestrator/YARP checks; Swagger exposure is environment-configured.
+
+### HTTP attack surface
+`FinWallet.Shared.Web` applies:
+- Kestrel server header disabled;
+- TRACE/CONNECT blocked;
+- JSON required for body-bearing POST/PUT/PATCH;
+- body/header-count/header-size limits;
+- request-header/keep-alive timeouts;
+- max concurrent connections;
+- per-IP fixed-window rate limit;
+- zero queue by default;
+- CORS allow-list;
+- bounded correlation ID;
+- no-store/no-cache;
+- CSP plus frame/MIME/referrer/permissions/cross-origin headers.
+
+These controls reduce L7 abuse/resource exhaustion; volumetric DDoS still requires cloud/edge/ingress/WAF protections.
+
+### Passwords
+V1:
+- PBKDF2-HMAC-SHA512;
+- 220,000 iterations;
+- 32-byte random salt;
+- 64-byte hash;
+- constant-time comparison;
+- persisted hash version.
+
+Iteration count is not a loose runtime tuning value; future change requires versioned migration/rehash.
+
+### JWT and sessions
+JWT uses fixed HMAC-SHA256 with minimal `sub`, `sid`, JTI and iat claims. It contains no balance/IBAN/contact data. Issuer/audience/signing key come from configuration/secret store. Lifetime is configurable only within a safe range. Signing algorithm is not configurable.
+
+High-risk transfer validates `sid` against MSSQL CustomerSession state so a revoked session can stop money movement before its short-lived JWT expires.
+
+### Refresh tokens
+Clients receive opaque random tokens; raw tokens are not persisted. Rotation is single-use through compare-and-set semantics. Reuse of a consumed token revokes the session/token family.
+
+### OTP
+Redis stores an HMAC digest rather than raw OTP. Lua scripts provide atomic issue/attempt/consume behavior. Verification fails closed when Redis is unavailable.
+
+### SQL injection
+Financial/auth persistence uses parameterized SqlClient commands. Request text is never used as a dynamic SQL fragment.
+
+### BOLA / ownership
+- customer identity comes from JWT `sub`;
+- owned-resource queries include customer boundaries;
+- transfer source ownership is validated before fraud and again inside locked posting;
+- destination/currency/lifecycle are revalidated before commit.
+
+### Fraud security
+Clients cannot supply trust flags such as `isNewDevice`, known beneficiary, velocity or 24-hour amount. Signals come from durable server state.
 
 ```text
-Scope + CustomerId + IdempotencyKey
+completed replay
+-> server-side risk signals
+-> internal fraud
+-> external fraud
+-> combined decision
+-> posting only on Allow
 ```
+External fraud unavailable/malformed => fail closed.
 
-A canonical request hash prevents the same key being reused with a different transfer payload.
+### Idempotency / replay
+Money-changing transfer requires `Idempotency-Key`. Durable identity is `Scope + CustomerId + Key`; a canonical request hash turns same-key/different-payload reuse into a conflict.
 
-Completed replay returns the existing immutable transaction rather than executing the financial effect again.
-
-## Ledger/data integrity
-
-Wallet balance is not the only financial truth. Every posted transfer is represented in double-entry accounting.
-
-Important invariants:
-
-- positive bounded amounts;
-- currency consistency;
-- debit = credit;
-- one financial SQL transaction for balances/transaction/ledger/idempotency;
-- reversal creates a new journal instead of mutating history;
-- MSSQL FKs/unique/check constraints backstop Application validation.
-
-## Sensitive logging policy
-
+### Logging
 Never log:
-
-- password or password hash/salt;
-- OTP, OTP digest or pepper;
-- JWT access token;
-- refresh token/hash;
+- password/hash/salt;
+- OTP/digest/pepper;
+- JWT/refresh token;
 - Authorization header;
-- internal/downstream service keys;
-- JWT signing key;
-- SQL/Redis connection strings with credentials;
-- unmasked phone/email/IBAN/account numbers.
+- internal/downstream keys;
+- signing key;
+- SQL/Redis connection strings containing credentials;
+- unmasked phone/email/IBAN/account values.
 
-Correlation IDs are allowed only after format/length validation and must not contain PII.
+### OWASP/API security summary
+- Broken Access Control/BOLA: gateway + service auth and owner-aware SQL.
+- Authentication failures: JWT/session/refresh rotation/login lockout/OTP/rate limit.
+- Injection: parameterized SQL.
+- Security Misconfiguration: prod Swagger off, bounded HTTP config, no server header.
+- Cryptographic failures: PBKDF2, HMAC, short JWT, secret management.
+- Sensitive business flows: durable idempotency, fraud and ledger.
+- Resource consumption: rate/body/header/connection/timeouts.
+- SSRF/unsafe API consumption: provider URLs are server-owned configuration.
+- Supply chain: central package versions and CI build/test; SBOM/vulnerability scanning remains open work.
 
-## OWASP Top 10 / API Security mapping
-
-The detailed platform mapping is maintained in `15-gateway-platform-security.md`. High-level coverage includes:
-
-- Broken Access Control / BOLA: gateway + service auth, owner-aware SQL, server-derived customer identity.
-- Security Misconfiguration: prod Swagger off, empty secret defaults, bounded HTTP configuration, no server header.
-- Supply Chain: central NuGet versions, explicit dependency inventory, CI build/test.
-- Cryptographic Failures: PBKDF2, random salts, HMAC OTP digest, bounded JWT lifetime, secret-store requirements.
-- Injection: parameterized SQL and typed DTOs.
-- Insecure Design / Sensitive Business Flows: ledger, durable idempotency, fraud, transaction boundaries.
-- Authentication Failures: JWT/session/refresh rotation/login lockout/OTP/rate limits.
-- Data/Software Integrity: DB constraints, append-only/reversal accounting, atomic posting.
-- Logging/Alerting: sensitive-data policy and correlation; centralized alerting remains an operations integration.
-- Exceptional Conditions: fail-closed providers, central errors, cancellation, rollback, health checks.
-- Unrestricted Resource Consumption: rate/body/header/connection/timeout limits.
-- SSRF/Unsafe API Consumption: provider destinations are server configuration; provider DTO/state is validated behind adapters.
-
-## Production perimeter requirement
-
-Application controls do not absorb a large volumetric DDoS attack. Public production deployment should additionally provide infrastructure-layer protections appropriate to the hosting platform, such as:
-
-- managed DDoS protection;
-- L4/L7 load balancer limits;
-- ingress/network policies;
-- WAF rules;
-- bot/abuse controls where relevant;
-- TLS termination and certificate rotation;
-- network segmentation so backend services are not publicly routable.
-
-## Remaining security work
-
-- integration tests proving gateway bypass denial and rate limits;
-- dependency vulnerability/SBOM scanning in CI;
-- centralized structured masked logging + alerting/SIEM;
-- infrastructure NetworkPolicy/ingress manifests;
-- logout/session revoke endpoint completion;
+### Remaining security work
+- Gateway bypass/rate-limit integration tests;
+- dependency vulnerability/SBOM scanning;
+- centralized masked logging/SIEM/alerting;
+- NetworkPolicy/ingress/TLS hardening;
+- logout/session-revoke endpoint;
 - durable FraudEvents/manual review;
-- real reconciliation and incident runbooks.
+- incident/reconciliation runbooks.
