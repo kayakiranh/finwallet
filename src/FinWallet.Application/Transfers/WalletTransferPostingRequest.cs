@@ -1,3 +1,5 @@
+using FinWallet.Domain.Shared;
+
 namespace FinWallet.Application.Transfers;
 
 /// <summary>
@@ -10,7 +12,7 @@ public sealed class WalletTransferPostingRequest
     /// <param name="customerId">TR: Source wallet'ın authenticated owner customer kimliği. EN: Authenticated owner-customer identifier of the source wallet.</param>
     /// <param name="sourceWalletId">TR: Para çıkacak internal wallet kimliği. EN: Internal wallet identifier to debit.</param>
     /// <param name="destinationWalletId">TR: Para girecek internal wallet kimliği. EN: Internal wallet identifier to credit.</param>
-    /// <param name="amount">TR: Pozitif transfer tutarı; currency source wallet'tan belirlenir. EN: Positive transfer amount; currency is determined from the source wallet.</param>
+    /// <param name="amount">TR: Pozitif ve `DECIMAL(19,4)` uyumlu transfer tutarı; currency source wallet'tan belirlenir. EN: Positive `DECIMAL(19,4)` compatible transfer amount; currency is determined from the source wallet.</param>
     /// <param name="idempotencyKey">TR: Customer/scope içinde benzersiz durable idempotency anahtarı. EN: Durable idempotency key unique within customer/scope.</param>
     public WalletTransferPostingRequest(Guid customerId, Guid sourceWalletId, Guid destinationWalletId, decimal amount, string idempotencyKey)
     {
@@ -19,6 +21,7 @@ public sealed class WalletTransferPostingRequest
         if (destinationWalletId == Guid.Empty) throw new ArgumentException("Destination wallet identifier cannot be empty.", nameof(destinationWalletId));
         if (sourceWalletId == destinationWalletId) throw new ArgumentException("Source and destination wallets must differ.");
         if (amount <= 0m) throw new ArgumentOutOfRangeException(nameof(amount));
+        FinancialAmountRules.EnsureStorageCompatible(amount, nameof(amount));
         ArgumentException.ThrowIfNullOrWhiteSpace(idempotencyKey);
         var normalizedKey = idempotencyKey.Trim();
         if (normalizedKey.Length > 128) throw new ArgumentOutOfRangeException(nameof(idempotencyKey), "Idempotency key cannot exceed 128 characters.");
