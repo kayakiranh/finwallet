@@ -1,4 +1,5 @@
 using System.Text;
+using FinWallet.Api.Configuration;
 using FinWallet.Api.Errors;
 using FinWallet.Application.Authentication;
 using FinWallet.Application.Communication;
@@ -36,10 +37,10 @@ ArgumentException.ThrowIfNullOrWhiteSpace(jwtAudience);
 var jwtSigningKey = builder.Configuration["FinWallet:Security:Jwt:SigningKey"];
 ArgumentException.ThrowIfNullOrWhiteSpace(jwtSigningKey);
 
-var fakeCommunicationBaseUri = CreateRequiredBaseUri(
+var fakeCommunicationBaseUri = IntegrationUriFactory.CreateRequiredBaseUri(
     builder.Configuration["FinWallet:Integrations:FakeCommunication:BaseUrl"],
     "FinWallet:Integrations:FakeCommunication:BaseUrl");
-var fakeFraudBaseUri = CreateRequiredBaseUri(
+var fakeFraudBaseUri = IntegrationUriFactory.CreateRequiredBaseUri(
     builder.Configuration["FinWallet:Integrations:FakeFraud:BaseUrl"],
     "FinWallet:Integrations:FakeFraud:BaseUrl");
 
@@ -120,19 +121,3 @@ app.UseAuthorization();
 app.MapControllers();
 
 app.Run();
-
-/// <summary>
-/// TR: Zorunlu integration base URL değerini doğrular, absolute URI'ye dönüştürür ve relative HttpClient route'larının güvenli birleşmesi için son slash karakterini garanti eder.
-/// EN: Validates a required integration base URL, converts it into an absolute URI and guarantees a trailing slash for safe relative HttpClient route composition.
-/// </summary>
-/// <param name="configuredValue">TR: Configuration üzerinden gelen integration base URL değeri. EN: Integration base URL value supplied through configuration.</param>
-/// <param name="configurationKey">TR: Eksik/geçersiz değer durumunda tanılama için kullanılan configuration anahtarı. EN: Configuration key used for diagnostics when the value is missing or invalid.</param>
-/// <returns>TR: Son slash içeren doğrulanmış absolute URI değerini döndürür. EN: Returns a validated absolute URI containing a trailing slash.</returns>
-static Uri CreateRequiredBaseUri(string? configuredValue, string configurationKey)
-{
-    ArgumentException.ThrowIfNullOrWhiteSpace(configuredValue, configurationKey);
-    var normalized = configuredValue.EndsWith("/", StringComparison.Ordinal)
-        ? configuredValue
-        : $"{configuredValue}/";
-    return new Uri(normalized, UriKind.Absolute);
-}
