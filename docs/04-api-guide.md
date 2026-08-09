@@ -2,13 +2,51 @@
 
 ## API conventions
 
+### Controller-based Web API
+
+Every FinWallet HTTP service uses ASP.NET Core controller-based Web API. Minimal API endpoint mappings are forbidden. `Program.cs` is limited to composition/bootstrap concerns and registers controllers through `AddControllers()` / `MapControllers()`.
+
 ### Base path
 
-Main FinWallet endpoints use `/api/v1`.
+Main FinWallet business endpoints use `/api/v1`.
+
+### ServiceResult response envelope
+
+Every API response body uses the shared `ServiceResult<T>` contract from `FinWallet.Shared.Contracts`.
+
+Success example:
+
+```json
+{
+  "isSuccess": true,
+  "code": "AUTHENTICATED",
+  "message": "Authentication completed successfully.",
+  "data": {
+    "customerId": "d80b3773-ae17-4ca4-87e0-dca42d40ad6a"
+  },
+  "errors": []
+}
+```
+
+Failure example:
+
+```json
+{
+  "isSuccess": false,
+  "code": "INVALID_CREDENTIALS",
+  "message": "The supplied credentials are invalid.",
+  "data": null,
+  "errors": []
+}
+```
+
+Client applications must branch on HTTP status and the stable `code`; human-readable messages must not be parsed for logic.
+
+`ServiceResult<T>` is an HTTP transport contract. Domain and Application layers do not depend on it.
 
 ### Correlation
 
-Clients may supply `X-Correlation-Id`. The API layer will validate or create a correlation identifier and propagate it to external provider calls. Correlation IDs are not transaction IDs and must not contain PII.
+The current authentication API uses ASP.NET Core request trace identifiers when propagating correlation to FakeCommunication. A dedicated validated `X-Correlation-Id` propagation component remains part of the observability backlog. Correlation IDs are not transaction IDs and must never contain PII.
 
 ### Authentication
 
@@ -18,19 +56,25 @@ JWT access tokens are short lived. Raw access tokens and refresh tokens must nev
 
 ### Idempotency
 
-All future money-changing endpoints require `Idempotency-Key`. Registration/login endpoints do not use the financial idempotency mechanism; registration uniqueness is protected by normalized phone uniqueness and OTP verification.
+All money-changing endpoints require `Idempotency-Key`. Registration/login endpoints do not use the financial idempotency mechanism; registration uniqueness is protected by normalized phone uniqueness and OTP verification.
 
-### Error format
+### Error handling
 
-API errors will use Problem Details with a stable application error code. Client applications must branch on the error code/status rather than parsing human-readable messages.
+Expected registration/authentication exceptions are converted centrally into `ServiceResult<object>` failures with stable machine-readable codes. Unexpected exception details are not returned to clients.
+
+## Health
+
+### GET `/health/live`
+
+All HTTP services expose controller-based liveness endpoints and return `ServiceResult<HealthResponse>`.
 
 ## Authentication and registration endpoints
 
-The contracts below are the Phase 2 target API surface. Routes are connected only after the durable MSSQL/Redis implementations are available; no in-memory production substitute is used.
+The endpoints below are implemented as actions on `AuthenticationController`.
 
 ### POST `/api/v1/auth/register`
 
-Creates a pending customer registration and sends a verification OTP through FakeCommunication.
+Creates a durable pending customer registration and sends a verification OTP through FakeCommunication.
 
 Request:
 
@@ -46,27 +90,32 @@ Request:
 Processing rules:
 
 - Supported registration countries are explicitly allow-listed.
-- Phase 2 baseline supports `TR/+90` and `AZ/+994`.
+- Current baseline supports `TR/+90` and `AZ/+994`.
 - Country selection and phone calling code must match.
 - Phone is normalized before uniqueness lookup.
 - Password must satisfy the fixed server-side password policy.
 - Password is converted to PBKDF2 hash material and the raw password is never persisted.
 - Customer and CustomerCredential are persisted atomically in PendingVerification state.
 - OTP issuance/SMS occurs after the durable DB transaction has completed.
-- A communication-provider failure leaves the customer PendingVerification and is recoverable through OTP resend rather than rolling back durable customer identity.
 
-Successful response (planned `202 Accepted`):
+Successful response: HTTP `202 Accepted` with `ServiceResult<RegisterCustomerResponse>`.
 
 ```json
 {
-  "customerId": "d80b3773-ae17-4ca4-87e0-dca42d40ad6a",
-  "otpExpiresAt": "2026-08-09T13:40:00Z"
+  "isSuccess": true,
+  "code": "REGISTRATION_ACCEPTED",
+  "message": "Registration accepted and verification is pending.",
+  "data": {
+    "customerId": "d80b3773-ae17-4ca4-87e0-dca42d40ad6a",
+    "otpExpiresAt": "2026-08-09T13:40:00Z"
+  },
+  "errors": []
 }
 ```
 
 The OTP itself is never returned by FinWallet.
 
-### POST `/api/v1/auth/register/verify`
+### POST `/api/v1/auth/registration/verify`
 
 Verifies and consumes the SMS OTP and activates a PendingVerification customer.
 
@@ -81,9 +130,10 @@ Request:
 
 Rules:
 
-- OTP verification/consumption must be atomic in the OTP store.
+- OTP verification/consumption is atomic in Redis.
 - A successful repeated verification after the customer is already Active is treated idempotently.
 - Incorrect/expired/consumed OTPs return the same generic verification error.
+- Success returns HTTP 200 with a body-bearing `ServiceResult<object>`; the API does not use 204 because every API response follows the ServiceResult contract.
 
 ### POST `/api/v1/auth/login`
 
@@ -99,25 +149,16 @@ Request:
 }
 ```
 
-Successful response (planned `200 OK`):
-
-```json
-{
-  "customerId": "d80b3773-ae17-4ca4-87e0-dca42d40ad6a",
-  "sessionId": "b50c09dc-2ff4-4f6a-ac5f-79f9890f35f2",
-  "accessToken": "<jwt>",
-  "accessTokenExpiresAt": "2026-08-09T13:50:00Z",
-  "refreshToken": "<opaque-token>",
-  "refreshTokenExpiresAt": "2026-08-23T13:40:00Z"
-}
-```
+Successful response: HTTP `200 OK` with `ServiceResult<AuthenticationTokensResponse>`.
 
 Rules:
 
 - Unknown phone and wrong password return the same invalid-credentials response.
 - Missing-user requests still perform expensive password work to reduce coarse enumeration timing differences.
+- Failed-login state is updated under a short MSSQL row lock to prevent lost updates during concurrent invalid logins.
 - Five consecutive failures trigger a fixed temporary credential lock.
-- Successful login resets failed-login state and atomically persists the session plus initial refresh-token hash.
+- Successful login rechecks the current credential under lock before session creation; a concurrent lock or password change prevents session creation.
+- Session, credential reset and initial refresh-token hash are persisted atomically.
 - Access token lifetime is fixed at ten minutes.
 - Session absolute lifetime is fixed at thirty days.
 - Individual refresh tokens have a maximum fourteen-day lifetime and never outlive the session.
@@ -139,16 +180,17 @@ Rules:
 - Raw refresh tokens are never persisted.
 - Server lookup uses a deterministic SHA-256 hash of the opaque token.
 - The current refresh token is consumed and replaced atomically.
+- Concurrent rotation uses MSSQL compare-and-set behavior so only one request can win.
 - Reuse of a previously consumed refresh token revokes the associated session and remaining refresh tokens.
 - Expired/revoked/unknown tokens return a generic invalid-refresh response.
 
 ### POST `/api/v1/auth/logout`
 
-Planned Phase 2/3 endpoint that revokes the current session and all refresh tokens associated with it. Existing access JWTs remain short-lived; protected endpoint authorization will additionally be able to consult session revocation state where the operation requires it.
+Not implemented yet. The planned endpoint revokes the current session and all refresh tokens associated with it.
 
 ## Financial endpoint conventions
 
-Financial endpoint details are added in Phase 6. All money-changing operations will require:
+Financial endpoint details are added with the transaction/ledger phase. All money-changing operations require:
 
 - authenticated active customer/session;
 - `Idempotency-Key`;
@@ -158,4 +200,5 @@ Financial endpoint details are added in Phase 6. All money-changing operations w
 - cutoff evaluation for bank workflows where applicable;
 - balanced ledger commit;
 - structured masked financial logging;
-- outbox-driven post-commit SMS/email notifications.
+- outbox-driven post-commit SMS/email notifications;
+- `ServiceResult<T>` response bodies for success and failure.
