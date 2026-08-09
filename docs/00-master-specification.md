@@ -1,253 +1,289 @@
-# FinWallet Master Specification v1
+# FinWallet Ana Spesifikasyonu / Master Specification
 
-## 1. Product Goal
-FinWallet is a .NET 8 multi-currency digital-wallet side project designed to exercise real financial-system concerns: transaction consistency, double-entry accounting, idempotency, concurrency, external integrations, fraud checks, cutoff/business calendars, campaigns, notifications, reconciliation, security, and observability.
+## Türkçe
 
-## 2. Core Scope
-### Customer and authentication
-- All interactive users are Customers.
-- Custom JWT access token, refresh token rotation and session model.
-- No ASP.NET Core Identity.
-- Registration restricted by supported country and country/phone-prefix compatibility.
-- Registration OTP via FakeCommunication.Api SMS.
+### 1. Ürün amacı
+FinWallet; .NET 8 tabanlı, multi-currency bir digital-wallet side projectidir. Amaç gerçek finansal backend problemlerini göstermektir: transaction consistency, double-entry accounting, idempotency, concurrency, external integrations, fraud, authentication/session security, cutoff, campaigns, notifications, reconciliation, security ve observability.
 
-### Wallets and accounts
-- A Customer can hold separate wallets for multiple supported currencies.
-- A Customer can open matching external bank accounts through FakeBank.Api.
-- Wallet and BankAccount are different domain concepts.
+### 2. Güncel kapsam
+**Customer/Auth**
+- TR/AZ country/phone policy ile registration.
+- Redis tabanlı OTP verification.
+- PBKDF2 password hashing.
+- JWT access token + durable server session.
+- Opaque refresh-token rotation ve reuse detection.
+
+**Wallet/Account**
+- TRY/USD/EUR wallet create/list.
+- FakeBank üzerinden external BankAccount opening.
+- Wallet ve BankAccount ayrı domain kavramlarıdır.
+- v1'de FX conversion yoktur.
+
+**Financial Core**
+- Double-entry Ledger.
+- Durable FinancialTransaction.
+- MSSQL tabanlı durable idempotency.
+- Atomik wallet-to-wallet transfer.
+- Internal + external fraud decision.
+
+**Platform**
+- YARP Gateway tüm normal public/client ve FinWallet->provider HTTP trafiğinin giriş noktasıdır.
+- Gateway JWT, internal-service authorization, rate limit, health checks ve load balancing uygular.
+- Tüm Web API projelerinde Swagger vardır; production'da varsayılan kapalıdır.
+
+### 3. Henüz tamamlanmamış kapsam
+- Public BankDeposit ve BankWithdrawal.
+- Merchant purchase / campaign accounting.
+- Public Refund/Reversal flow.
+- Durable FraudEvents/manual review.
+- Transactional Outbox/Inbox.
+- Transaction history/read model.
+- ReconciliationRuns/ReconciliationIssues.
+- Merkezi maskeli structured logging, OpenTelemetry ve alerting.
+- Real MSSQL/Redis/YARP integration-concurrency test suite.
+- Logout/session-revoke public endpoint.
+
+### 4. Teknoloji kuralları
+- .NET 8 / C# 12.
+- ASP.NET Core controller-based Web API.
+- MSSQL durable source of truth.
+- Redis yalnız transient state.
+- JWT auth; ASP.NET Core Identity kullanılmaz.
+- YARP reverse proxy/gateway.
+- Built-in DI.
+- Paid/freemium NuGet yasaktır.
+- Paket versiyonları `Directory.Packages.props` ile merkezi yönetilir.
+
+### 5. Mimari
+Ana uygulama modular monolith'tir:
+```text
+FinWallet.Api
+FinWallet.Application
+FinWallet.Domain
+FinWallet.Infrastructure
+FinWallet.Shared.Contracts
+FinWallet.Shared.Web
+FinWallet.Gateway
+```
+
+External simulatorlar ayrı Web API prosesleridir:
+```text
+FakeBank.Api
+FakeFraud.Api
+FakeCutoff.Api
+FakeCampaign.Api
+FakeCommunication.Api
+```
+
+### 6. Finansal doğruluk invariant'ları
+1. Hiçbir para hareketi Ledger'ı atlayamaz.
+2. Her posted journal için total Debit = total Credit olmalıdır.
+3. MSSQL final financial consistency authority'dir.
+4. Redis kaybı duplicate money, negative balance veya ledger corruption yaratmamalıdır.
+5. External HTTP açık financial SQL transaction içinde çalıştırılmaz.
+6. Duplicate command ve retry güvenli olmalıdır.
+7. Same idempotency key + different payload conflict'tir.
+8. Completed financial history mutate/delete edilmez; correction reversal/compensation ile yapılır.
+9. Currency her Money değerinin parçasıdır ve commit öncesi doğrulanır.
+10. Reconciliation mismatch'i sessizce balance update ederek düzeltmez.
+
+### 7. Gateway güvenlik kuralı
+```text
+Client -> Gateway -> FinWallet.Api
+FinWallet.Api -> Gateway /providers/* -> Fake providers
+```
+
+- Protected public `/api/*` rotalarında Gateway JWT ister.
+- FinWallet.Api JWT/ownership kontrolünü tekrar yapar.
+- FinWallet.Api provider route'larına `InternalServiceKey` ile gider.
+- Gateway destination request'e ayrı `DownstreamServiceKey` yazar.
+- Backend/provider business endpointleri downstream key olmadan doğrudan çağrıyı reddeder.
+
+### 8. Finansal işlem modeli
+Wallet transfer sırası:
+```text
+completed durable replay
+-> durable session/risk signals
+-> internal fraud
+-> external fraud
+-> final Allow
+-> atomic MSSQL posting
+```
+
+Atomic posting aynı transaction'da idempotency + balances + FinancialTransaction + LedgerJournal + LedgerEntries commit eder.
+
+### 9. Security kuralları
+- Password/OTP/JWT/refresh token/service key/connection secret loglanmaz.
+- SQL parameterized kullanılır.
+- Auth/ownership client-supplied ID veya risk flag'e güvenmez.
+- JWT signing algorithm code-level invariant'tır.
+- PBKDF2 scheme değişikliği versioned migration gerektirir.
+- Rate/body/header/connection/timeouts Gateway ve backend katmanlarında uygulanır.
+- Volumetric DDoS için ayrıca ingress/WAF/cloud DDoS control gerekir.
+
+### 10. Definition of Done
+Bir feature ancak şu durumda tamamlanır:
+- solution build başarılı;
+- ilgili testler başarılı;
+- financial/concurrency/idempotency invariant'ları korunmuş;
+- external failure davranışı tanımlanmış;
+- güvenlik/logging etkileri değerlendirilmiş;
+- package inventory güncel;
+- TR/EN XML documentation güncel;
+- etkilenen tüm Markdown dokümanları TR+EN ve kodla tutarlı.
+
+### 11. v1 kapsam dışı
+- gerçek banka/fraud/SMS/email providerları;
+- credit-card acquiring/payment gateway;
+- full core banking;
+- loans/credit scoring;
+- stock/crypto trading;
+- FX conversion;
+- Event Sourcing;
+- zorunlu Kafka/RabbitMQ;
+- full microservice decomposition.
+
+---
+
+## English
+
+### 1. Product goal
+FinWallet is a .NET 8 multi-currency digital-wallet side project intended to demonstrate real financial-backend concerns: transaction consistency, double-entry accounting, idempotency, concurrency, external integrations, fraud, authentication/session security, cutoff, campaigns, notifications, reconciliation, security and observability.
+
+### 2. Current scope
+**Customer/Auth**
+- Registration with TR/AZ country/phone policy.
+- Redis-backed OTP verification.
+- PBKDF2 password hashing.
+- JWT access token plus durable server session.
+- Opaque refresh-token rotation and reuse detection.
+
+**Wallet/Account**
+- TRY/USD/EUR wallet create/list.
+- External BankAccount opening through FakeBank.
+- Wallet and BankAccount are separate domain concepts.
 - No FX conversion in v1.
 
-### Financial operations
-- Deposit / Bank-to-Wallet funding
-- Withdrawal / Wallet-to-Bank transfer
-- Wallet-to-Wallet transfer
-- Merchant purchase
-- Refund
-- Reversal / compensation where required
+**Financial Core**
+- Double-entry Ledger.
+- Durable FinancialTransaction.
+- MSSQL-backed durable idempotency.
+- Atomic wallet-to-wallet transfer.
+- Internal plus external fraud decision.
 
-### Ledger
-- Double-entry ledger for every financial movement.
-- Append-only normal operation.
-- Balanced journal invariant.
-- Wallet balances are current state; Ledger is authoritative financial history.
+**Platform**
+- YARP Gateway is the entry point for normal public/client and FinWallet-to-provider HTTP traffic.
+- Gateway applies JWT, internal-service authorization, rate limiting, health checks and load balancing.
+- Every Web API has Swagger; production defaults to disabled.
 
-### Fraud
-- Internal rule-based fraud checks inside FinWallet.
-- External fraud evaluation through FakeFraud.Api.
-- Combined decision: Allow / Review / Deny.
-- Redis may hold velocity counters; durable fraud events remain in MSSQL.
+### 3. Not yet complete
+- Public BankDeposit and BankWithdrawal.
+- Merchant purchase / campaign accounting.
+- Public Refund/Reversal flow.
+- Durable FraudEvents/manual review.
+- Transactional Outbox/Inbox.
+- Transaction history/read model.
+- ReconciliationRuns/ReconciliationIssues.
+- Centralized masked structured logging, OpenTelemetry and alerting.
+- Real MSSQL/Redis/YARP integration-concurrency test suite.
+- Public logout/session-revoke endpoint.
 
-### Cutoff
-- FakeCutoff.Api owns business-hours, country/bank/currency/transaction-type cutoff, holidays, processing date and settlement date calculations.
-- FinWallet consumes the result and controls transaction workflow.
+### 4. Technology rules
+- .NET 8 / C# 12.
+- ASP.NET Core controller-based Web API.
+- MSSQL as durable source of truth.
+- Redis for transient state only.
+- JWT auth; no ASP.NET Core Identity.
+- YARP reverse proxy/gateway.
+- Built-in DI.
+- Paid/freemium NuGet packages are forbidden.
+- Package versions are centrally managed in `Directory.Packages.props`.
 
-### Campaigns
-- FakeCampaign.Api owns eligibility and discount calculations.
-- Campaigns may be merchant-specific, merchant-group/category based, date-bound, currency-bound and capped.
-- FinWallet owns the accounting impact of any returned discount and sponsor allocation.
+### 5. Architecture
+The main application is a modular monolith:
+```text
+FinWallet.Api
+FinWallet.Application
+FinWallet.Domain
+FinWallet.Infrastructure
+FinWallet.Shared.Contracts
+FinWallet.Shared.Web
+FinWallet.Gateway
+```
 
-### Communication
-- FakeCommunication.Api provides SMS and email simulation.
-- Registration uses SMS OTP.
-- Financial operations use asynchronous SMS/email notifications.
-- Notification failure cannot reverse a completed transaction.
+External simulators are separate Web API processes:
+```text
+FakeBank.Api
+FakeFraud.Api
+FakeCutoff.Api
+FakeCampaign.Api
+FakeCommunication.Api
+```
 
-### Reconciliation
-- Wallet current state vs Ledger-derived balance.
-- Internal bank-related transaction/ledger state vs FakeBank statement.
-- Differences are recorded and investigated; balances are never silently rewritten.
+### 6. Financial-correctness invariants
+1. No money movement may bypass the Ledger.
+2. Every posted journal must satisfy total Debit = total Credit.
+3. MSSQL is the final financial-consistency authority.
+4. Redis loss must not create duplicate money, negative balance or ledger corruption.
+5. External HTTP never runs inside an open financial SQL transaction.
+6. Duplicate commands and retries must be safe.
+7. Same idempotency key + different payload is a conflict.
+8. Completed financial history is not mutated/deleted; corrections use reversal/compensation.
+9. Currency is part of every Money value and validated before commit.
+10. Reconciliation never silently repairs a mismatch with a balance UPDATE.
 
-### Logging
-- Structured JSON Lines file logs.
-- Separate application, financial and audit concerns.
-- Central masking/redaction.
-- Never log password, OTP, JWT, refresh token, Authorization header or secret values.
+### 7. Gateway security rule
+```text
+Client -> Gateway -> FinWallet.Api
+FinWallet.Api -> Gateway /providers/* -> Fake providers
+```
 
-## 3. Technology Constraints
-- .NET 8
-- ASP.NET Core Web API
-- MSSQL
-- Redis
-- JWT
-- Docker for local dependencies/environment
-- Built-in .NET dependency injection
-- Paid/freemium NuGet packages forbidden
-- Prefer .NET built-ins / Microsoft packages; third-party dependencies must be fully free/open-source and justified in documentation
+- Gateway requires JWT for protected public `/api/*` routes.
+- FinWallet.Api repeats JWT and ownership validation.
+- FinWallet.Api calls provider routes using `InternalServiceKey`.
+- Gateway writes a separate `DownstreamServiceKey` on destination requests.
+- Backend/provider business endpoints reject direct calls without the downstream key.
 
-## 4. Architecture
-### Main application
-Modular Monolith with projects:
-- FinWallet.Api
-- FinWallet.Application
-- FinWallet.Domain
-- FinWallet.Infrastructure
+### 8. Financial-operation model
+Wallet transfer order:
+```text
+completed durable replay
+-> durable session/risk signals
+-> internal fraud
+-> external fraud
+-> final Allow
+-> atomic MSSQL posting
+```
 
-### External simulators
-- FakeBank.Api
-- FakeFraud.Api
-- FakeCutoff.Api
-- FakeCampaign.Api
-- FakeCommunication.Api
+Atomic posting commits idempotency + balances + FinancialTransaction + LedgerJournal + LedgerEntries in one transaction.
 
-### Test projects
-- FinWallet.UnitTests
-- FinWallet.IntegrationTests
-- FinWallet.EndToEndTests
+### 9. Security rules
+- Never log password/OTP/JWT/refresh token/service keys/connection secrets.
+- Use parameterized SQL.
+- Authorization/ownership does not trust client-supplied identity or risk flags.
+- JWT signing algorithm is a code-level invariant.
+- PBKDF2 scheme changes require versioned migration.
+- Rate/body/header/connection/time limits exist at Gateway and backend layers.
+- Volumetric DDoS additionally requires ingress/WAF/cloud DDoS controls.
 
-## 5. Required Design Patterns
-Use where justified, without ceremonial over-engineering:
-- DDD-lite: Entity, Value Object, Aggregate, Invariant, Domain Event
-- State Machine for transaction lifecycles
-- Adapter + Anti-Corruption Layer for every external provider
-- Application Orchestrator / explicit workflow pipeline
-- Chain of Responsibility for internal fraud rules
-- Policy Pattern for fraud/integration decisions
-- Repository only at meaningful aggregate/persistence boundaries
-- Unit of Work / explicit SQL transaction boundary
-- Double-entry ledger and reversal model
-- Transactional Outbox
-- Inbox / Idempotent Consumer
-- Saga + Compensation only for long external-bank workflows
-- Optimistic Concurrency + atomic database operations
-- Idempotent Command
-- Cache-Aside / TTL for Redis data
-- Timeout / Circuit Breaker / controlled Retry
-- Fail-fast validation
-- Explicit fail-open/fail-closed provider policy
-- Structured Logging + central redaction
-- Reconciliation / matching strategy
-- CQRS-lite only as organizational separation; no separate read database/event-sourcing infrastructure
+### 10. Definition of Done
+A feature is complete only when:
+- the solution builds successfully;
+- relevant tests pass;
+- financial/concurrency/idempotency invariants remain valid;
+- external failure behavior is defined;
+- security/logging impact is reviewed;
+- package inventory is current;
+- TR/EN XML documentation is current;
+- all affected Markdown documents are TR+EN and consistent with code.
 
-## 6. Financial Correctness Rules
-1. No financial movement may bypass Ledger.
-2. Every journal must balance before commit.
-3. MSSQL is the final consistency authority.
-4. Redis loss must never permit duplicate money, negative balance or ledger corruption.
-5. External HTTP calls must not keep a SQL transaction open.
-6. Duplicate commands and duplicate provider callbacks must be safe.
-7. A completed transaction cannot transition backward to processing.
-8. Corrections use reversal/compensation, not mutation/deletion of history.
-9. Currency must be part of Money and validated before financial commit.
-10. Reconciliation never silently repairs balances.
-
-## 7. External Provider Behavior
-Each fake provider must support deterministic happy paths plus configurable/dummy failure behavior such as delay, timeout, 5xx, reject and duplicate callback where relevant.
-
-### FakeBank.Api
-- Customer/account creation as needed by integration contract
-- Open currency-specific account
-- Withdrawal/deposit/transfer-like bank operations used by FinWallet
-- Pending/approved/rejected/failed states
-- Status lookup and/or callback
-- Statement/transaction feed for reconciliation
-
-### FakeFraud.Api
-- Evaluate transaction using dummy rules/data
-- Return provider reference, score/signals, Allow/Review/Deny
-- Simulate latency/timeout/error
-
-### FakeCutoff.Api
-- Input: transaction type, currency, country, bank/provider context, request time
-- Own holiday/business-day dataset
-- Return whether processable now, processing date, settlement date and reason
-
-### FakeCampaign.Api
-- Input: customer reference, merchant, amount, currency, date/context
-- Return eligibility, campaign id, original amount, discount, final amount and sponsor type
-- Campaign usage limits must be concurrency-safe inside the simulator when limits exist
-
-### FakeCommunication.Api
-- SMS and Email endpoints
-- OTP delivery simulation
-- Financial notification simulation
-- Success/delay/failure modes
-
-## 8. Security Requirements
-- Custom customer credentials/session design
-- Secure fixed password-hashing strategy; not runtime selectable
-- Hash-version field allowed for future migration
-- Refresh-token rotation and reuse detection
-- Login/OTP rate limits and brute-force controls
-- Country + phone prefix restriction at registration
-- Secret management through environment/user-secrets/deployment secrets
-- Parameterized SQL/ORM-safe access
-- Masked logs and distinct audit records
-
-## 9. Concurrency and Idempotency
-- Every money-changing command requires an idempotency key.
-- Redis can serve hot lookup/coordination; MSSQL must contain durable unique guarantee.
-- Same key + different request hash => conflict.
-- Duplicate callback => single effect through Inbox semantics.
-- Wallet updates use DB-level atomic protection and optimistic concurrency where appropriate.
-- Redis locks, if used, are secondary optimization/coordination only.
-
-## 10. Transaction Workflow Principles
-External workflows persist state between steps instead of holding long database transactions.
-Typical withdrawal:
-Created -> FraudPending -> FraudApproved -> Scheduled/Processing -> BankPending -> Completed
-Alternative terminal states: Rejected, Failed, Cancelled, Reversed.
-Funds may move Available -> Blocked before external completion, then finalize or compensate.
-
-## 11. Logging and Audit
-### Financial structured log fields (as applicable)
-- timestamp
-- level
-- eventType
-- correlationId
-- transactionId
-- customer public/internal reference
-- transactionType
-- amount
-- currency
-- masked source/target account
-- merchant/campaign references
-- internal/external fraud decision/reference
-- cutoff/provider reference
-- status
-- durationMs
-
-### Never log
-- password or password-derived secrets
-- OTP
-- JWT/access token
-- refresh token
-- Authorization header
-- raw secrets
-- unmasked sensitive account/phone/email identifiers
-
-## 12. Documentation Deliverables
-- docs/01-technical-analysis.md
-- docs/02-architecture.md
-- docs/03-design-patterns.md
-- docs/04-api-guide.md
-- docs/05-external-integrations.md
-- docs/06-technologies-and-packages.md
-- docs/07-database.md
-- docs/08-financial-flows.md
-- docs/09-security.md
-- docs/10-testing.md
-- docs/11-final-technical-review.md
-- docs/adr/*
-
-## 13. Definition of Done
-A feature is not done until:
-- code compiles
-- relevant unit/integration/E2E tests pass
-- financial/concurrency/idempotency rules are covered where applicable
-- external failure behavior is defined where applicable
-- structured logging and masking are correct
-- documentation is updated
-- new package usage is documented and license/paid/freemium restrictions verified
-- architecture review finds no forbidden dependency direction or pattern creep
-
-## 14. Explicit Out of Scope for v1
-- Real bank/fraud/SMS/email/campaign/cutoff providers
-- Credit-card acquiring/payment gateway
-- Full core banking
-- Loans/credit scoring
-- Stock/crypto trading
-- FX conversion
-- Event Sourcing
-- Kafka/RabbitMQ unless later approved by ADR
-- Full microservices decomposition
-- Kubernetes deployment
+### 11. Explicitly out of scope for v1
+- real bank/fraud/SMS/email providers;
+- credit-card acquiring/payment gateway;
+- full core banking;
+- loans/credit scoring;
+- stock/crypto trading;
+- FX conversion;
+- Event Sourcing;
+- mandatory Kafka/RabbitMQ;
+- full microservice decomposition.
