@@ -16,6 +16,16 @@ FinWallet is a .NET 8 multi-currency digital wallet platform with double-entry l
 - Built-in dependency injection
 - Structured JSON file logging with central masking/redaction
 
+## HTTP API standard
+- Minimal API endpoint mappings are forbidden in every HTTP project, including all fake provider APIs.
+- Every HTTP project uses controller-based ASP.NET Core Web API with `AddControllers`, `MapControllers`, `ControllerBase` and attribute routing.
+- `Program.cs` is composition/bootstrap only; business endpoints must not be declared through `MapGet`, `MapPost`, `MapPut`, `MapDelete` or route-handler lambdas.
+- Every API response body, including health, success and error responses, uses the shared `ServiceResult<T>` contract.
+- Controller actions return typed `ActionResult<ServiceResult<T>>` or an equivalent typed ServiceResult response.
+- Application and Domain layers must not reference `ServiceResult<T>`; controllers map internal use-case results to the shared HTTP contract.
+- Anonymous error payloads and ProblemDetails are not the public API contract. Stable machine-readable error codes are carried inside `ServiceResult<T>`.
+- API-specific request/response DTOs remain in their API projects and must not leak provider transport models into Domain.
+
 ## Architecture
 - Main FinWallet application: Modular Monolith, clean boundaries without ceremonial over-engineering
 - Layers: Api -> Application -> Domain; Infrastructure implements external/persistence concerns
