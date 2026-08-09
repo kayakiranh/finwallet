@@ -1,0 +1,55 @@
+# Production-like overlay for container hardening defaults.
+# Real production should additionally use an orchestrator/secret store, TLS ingress, WAF/DDoS controls,
+# image digests, vulnerability scanning, backups and external managed MSSQL/Redis where appropriate.
+# Usage: docker compose -f compose.yml -f compose.production.yml up -d --build
+
+services:
+  finwallet-api:
+    restart: always
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      Platform__Swagger__Enabled: "false"
+      Platform__Security__EnableHsts: "true"
+
+  fake-bank:
+    restart: always
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      Platform__Swagger__Enabled: "false"
+
+  fake-fraud:
+    restart: always
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      Platform__Swagger__Enabled: "false"
+
+  fake-cutoff:
+    restart: always
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      Platform__Swagger__Enabled: "false"
+
+  fake-campaign:
+    restart: always
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      Platform__Swagger__Enabled: "false"
+
+  fake-communication:
+    restart: always
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      Platform__Swagger__Enabled: "false"
+
+  gateway:
+    restart: always
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      Platform__Swagger__Enabled: "false"
+      Platform__Security__EnableHsts: "true"
+
+  mssql:
+    restart: always
+
+  redis:
+    restart: always
