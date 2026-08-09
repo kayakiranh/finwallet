@@ -85,26 +85,30 @@ public interface IAuthenticationStore
     Task<RefreshAuthenticationData?> FindRefreshDataAsync(string tokenHash, CancellationToken cancellationToken);
 
     /// <summary>
-    /// TR: Eski token consume state'i, yeni refresh token ve session aktivite zamanını tek MSSQL transaction içinde atomik olarak kalıcı hale getirir.
-    /// EN: Atomically persists old-token consumption, replacement refresh token and session activity time within one MSSQL transaction.
+    /// TR: Eski refresh token'ın DB'de halen kullanılmamış olduğunu koşullu olarak doğrular; yalnızca bu koşul sağlanırsa consume state'i, replacement token ve session aktivitesini tek MSSQL transaction içinde yazar. Aynı token ile yarışan iki isteğin yalnızca biri true dönebilmelidir.
+    /// EN: Conditionally verifies that the previous refresh token is still unused in the database and, only when that condition succeeds, writes its consumed state, the replacement token and session activity in one MSSQL transaction. Only one of two racing requests using the same token may return true.
     /// </summary>
     /// <param name="session">
     /// TR: Aktivite zamanı güncellenmiş müşteri session nesnesi.
     /// EN: Customer session object with updated activity time.
     /// </param>
     /// <param name="consumedToken">
-    /// TR: Rotation sırasında consume edilmiş eski refresh token kaydı.
-    /// EN: Previous refresh-token record consumed during rotation.
+    /// TR: Rotation sırasında consume edilmek istenen eski refresh token kaydı.
+    /// EN: Previous refresh-token record intended to be consumed during rotation.
     /// </param>
     /// <param name="replacementToken">
-    /// TR: Rotation sonucunda oluşturulan yeni refresh token kaydı.
-    /// EN: New refresh-token record created by rotation.
+    /// TR: Rotation sonucunda oluşturulacak yeni refresh token kaydı.
+    /// EN: New refresh-token record to be created by rotation.
     /// </param>
     /// <param name="cancellationToken">
     /// TR: Atomik persistence işleminin iptal sinyali.
     /// EN: Cancellation signal for the atomic persistence operation.
     /// </param>
-    Task RotateRefreshTokenAsync(
+    /// <returns>
+    /// TR: DB'deki token koşullu olarak consume edilip rotation commit edildiyse true; başka bir istek token'ı daha önce consume/revoke ettiyse false döndürür.
+    /// EN: Returns true when the database token was conditionally consumed and rotation committed; returns false when another request already consumed or revoked the token.
+    /// </returns>
+    Task<bool> TryRotateRefreshTokenAsync(
         CustomerSession session,
         RefreshToken consumedToken,
         RefreshToken replacementToken,
