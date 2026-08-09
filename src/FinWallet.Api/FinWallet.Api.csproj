@@ -3,6 +3,7 @@
     <ProjectReference Include="..\FinWallet.Application\FinWallet.Application.csproj" />
     <ProjectReference Include="..\FinWallet.Infrastructure\FinWallet.Infrastructure.csproj" />
     <ProjectReference Include="..\FinWallet.Shared.Contracts\FinWallet.Shared.Contracts.csproj" />
+    <ProjectReference Include="..\FinWallet.Shared.Web\FinWallet.Shared.Web.csproj" />
   </ItemGroup>
 
   <ItemGroup>
