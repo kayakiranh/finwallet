@@ -38,8 +38,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(find docs/pdf/TR -maxdepth 1 -name 'TR_*.pdf' | wc -l)" -eq 20
-          test "$(find docs/pdf/EN -maxdepth 1 -name 'EN_*.pdf' | wc -l)" -eq 20
+          test "$(find docs/pdf/TR -maxdepth 1 -name 'TR_*.pdf' | wc -l)" -eq 21
+          test "$(find docs/pdf/EN -maxdepth 1 -name 'EN_*.pdf' | wc -l)" -eq 21
+          test -s docs/pdf/TR/TR_20-docker-runbook.pdf
+          test -s docs/pdf/EN/EN_20-docker-runbook.pdf
           test -s docs/pdf/TR_FinWallet_Tum_Dokumanlar.pdf
           test -s docs/pdf/EN_FinWallet_All_Documents.pdf
 
@@ -57,4 +59,8 @@ jobs:
             exit 0
           fi
           git commit -m "docs: generate bilingual PDF documentation"
+          git pull --rebase origin "${HEAD_REF}"
+          python scripts/generate_docs_pdf.py
+          git add docs/pdf
+          git commit --amend --no-edit
           git push origin "HEAD:${HEAD_REF}"
