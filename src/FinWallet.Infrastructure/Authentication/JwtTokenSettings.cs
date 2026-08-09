@@ -3,8 +3,8 @@ using System.Text;
 namespace FinWallet.Infrastructure.Authentication;
 
 /// <summary>
-/// TR: JWT issuer, audience ve deployment secret değerlerini taşır; algoritma veya token ömrü gibi güvenlik kararlarını yapılandırılabilir hale getirmez.
-/// EN: Carries JWT issuer, audience and deployment-secret values without making security decisions such as algorithm or token lifetime configurable.
+/// TR: JWT issuer, audience, deployment secret ve güvenli sınırlar içinde ayarlanabilen access-token ömrünü taşır; imzalama algoritması gibi temel güvenlik kararlarını yapılandırılabilir hale getirmez.
+/// EN: Carries JWT issuer, audience, deployment secret and an access-token lifetime configurable within safe bounds without making core security decisions such as the signing algorithm configurable.
 /// </summary>
 public sealed class JwtTokenSettings
 {
@@ -12,23 +12,11 @@ public sealed class JwtTokenSettings
     /// TR: Doğrulanmış JWT deployment ayarlarını oluşturur.
     /// EN: Creates validated JWT deployment settings.
     /// </summary>
-    /// <param name="issuer">
-    /// TR: Access token'ları üreten FinWallet issuer kimliği.
-    /// EN: FinWallet issuer identifier that creates access tokens.
-    /// </param>
-    /// <param name="audience">
-    /// TR: Access token'ların hedeflediği FinWallet API audience değeri.
-    /// EN: FinWallet API audience targeted by access tokens.
-    /// </param>
-    /// <param name="signingKey">
-    /// TR: Deployment secret store üzerinden sağlanan en az 256-bit eşdeğer uzunlukta imzalama anahtarı.
-    /// EN: Signing key supplied by the deployment secret store with at least 256-bit equivalent length.
-    /// </param>
-    /// <exception cref="ArgumentException">
-    /// TR: Issuer, audience veya signing key boşsa ya da signing key 32 UTF-8 byte'tan kısa ise oluşur.
-    /// EN: Thrown when issuer, audience or signing key is empty, or when the signing key is shorter than 32 UTF-8 bytes.
-    /// </exception>
-    public JwtTokenSettings(string issuer, string audience, string signingKey)
+    /// <param name="issuer">TR: Access token issuer kimliği. EN: Access-token issuer identifier.</param>
+    /// <param name="audience">TR: Access token hedef audience değeri. EN: Target audience of access tokens.</param>
+    /// <param name="signingKey">TR: Secret store'dan gelen en az 256-bit eşdeğer imzalama anahtarı. EN: Signing key from the secret store with at least 256-bit equivalent length.</param>
+    /// <param name="accessTokenLifetimeMinutes">TR: 2-30 dakika arasında izin verilen access-token yaşam süresi. EN: Allowed access-token lifetime between 2 and 30 minutes.</param>
+    public JwtTokenSettings(string issuer, string audience, string signingKey, int accessTokenLifetimeMinutes)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(issuer);
         ArgumentException.ThrowIfNullOrWhiteSpace(audience);
@@ -39,26 +27,26 @@ public sealed class JwtTokenSettings
             throw new ArgumentException("JWT signing key must contain at least 32 UTF-8 bytes.", nameof(signingKey));
         }
 
+        if (accessTokenLifetimeMinutes is < 2 or > 30)
+        {
+            throw new ArgumentOutOfRangeException(nameof(accessTokenLifetimeMinutes), "Access-token lifetime must be between 2 and 30 minutes.");
+        }
+
         Issuer = issuer.Trim();
         Audience = audience.Trim();
         SigningKey = signingKey;
+        AccessTokenLifetime = TimeSpan.FromMinutes(accessTokenLifetimeMinutes);
     }
 
-    /// <summary>
-    /// TR: FinWallet access token issuer değerini döndürür.
-    /// EN: Gets the FinWallet access-token issuer value.
-    /// </summary>
+    /// <summary>TR: FinWallet access-token issuer değerini döndürür. EN: Gets the FinWallet access-token issuer.</summary>
     public string Issuer { get; }
 
-    /// <summary>
-    /// TR: FinWallet access token audience değerini döndürür.
-    /// EN: Gets the FinWallet access-token audience value.
-    /// </summary>
+    /// <summary>TR: FinWallet access-token audience değerini döndürür. EN: Gets the FinWallet access-token audience.</summary>
     public string Audience { get; }
 
-    /// <summary>
-    /// TR: Deployment secret store'dan alınan imzalama anahtarını döndürür; uygulama loglarına yazılmamalıdır.
-    /// EN: Gets the signing key obtained from the deployment secret store; it must not be written to application logs.
-    /// </summary>
+    /// <summary>TR: Loglanmaması gereken signing key değerini döndürür. EN: Gets the signing key that must never be logged.</summary>
     public string SigningKey { get; }
+
+    /// <summary>TR: Güvenli sınırlar içinde yapılandırılmış access-token yaşam süresini döndürür. EN: Gets the access-token lifetime configured within safe bounds.</summary>
+    public TimeSpan AccessTokenLifetime { get; }
 }
