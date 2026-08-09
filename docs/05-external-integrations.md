@@ -24,17 +24,6 @@ Simulates SMS and email providers. Registration OTP and financial notifications 
 
 ### POST `/api/v1/communication/sms`
 
-Request:
-
-```json
-{
-  "recipient": "+905321234567",
-  "messageType": "RegistrationOtp",
-  "body": "FinWallet verification code: 123456",
-  "correlationId": "request-correlation-id"
-}
-```
-
 Response: HTTP `202 Accepted` with `ServiceResult<SendMessageResponse>`.
 
 The message body can contain an OTP and must never be emitted to production logs.
@@ -45,57 +34,62 @@ The message body can contain an OTP and must never be emitted to production logs
 
 ### Failure simulation
 
-`X-Fake-Mode` supports:
-
-- `fail` — returns HTTP 503 with a ServiceResult failure;
-- `delay` — delays the response approximately two seconds;
-- `timeout` — delays long enough for the FinWallet client timeout/cancellation behavior to be tested.
-
-The simulator does not log OTP/message bodies.
+`X-Fake-Mode` supports `fail`, `delay` and `timeout`.
 
 ### FinWallet adapter
 
-`FakeCommunicationGateway` implements the Application `ICommunicationGateway` boundary. It maps the internal registration intent into the external provider DTO, calls `/api/v1/communication/sms`, and propagates `X-Correlation-Id`. Provider DTOs remain isolated under `FinWallet.Infrastructure.Communication`.
+`FakeCommunicationGateway` implements the Application `ICommunicationGateway` boundary. Provider DTOs remain isolated under `FinWallet.Infrastructure.Communication`.
 
 ## FakeBank.Api
 
-The service is controller-based and currently exposes a ServiceResult liveness endpoint. Planned contract responsibilities:
+FakeBank is an external-bank simulator. It owns provider-side accounts, transaction lifecycle, duplicate protection and reconciliation statement data. It never writes FinWallet Wallet, BankAccount or Ledger state.
 
-- external customer/account creation;
-- currency-specific bank accounts;
-- async/pending withdrawals and deposits;
-- callback/polling completion;
-- statement endpoint used for reconciliation;
-- deterministic external references and duplicate-request protection.
+Implemented controller endpoints:
 
-Financial POST retry is forbidden unless protected by a provider idempotency/external-reference contract.
+- `POST /api/v1/bank/accounts` — open a currency-specific external account;
+- `GET /api/v1/bank/accounts/{accountId}` — read-only account state lookup for polling;
+- `POST /api/v1/bank/accounts/{accountId}/activate` — simulator control that completes a pending opening;
+- `POST /api/v1/bank/transactions` — start Deposit/Withdrawal;
+- `POST /api/v1/bank/transactions/{transactionId}/finalize` — simulator control that completes/fails a pending transaction;
+- `GET /api/v1/bank/transactions/{transactionId}` — transaction status lookup;
+- `GET /api/v1/bank/accounts/{accountId}/statement` — completed movements for reconciliation.
+
+`X-Fake-Mode` supports `fail`, `delay`, `timeout` and `pending` on the relevant write endpoints.
+
+Provider-side write requests contain a stable `RequestKey`:
+
+- same key + same normalized payload returns the original provider result;
+- same key + different payload is a conflict;
+- concurrent first requests sharing the same key are serialized by the simulator;
+- repeated transaction finalization cannot apply a financial effect twice.
+
+### FinWallet bank boundary
+
+FinWallet Domain owns `BankAccount`, which links an internal Wallet to an external account while keeping internal and provider identifiers separate. `BankAccount` does not own the authoritative financial ledger.
+
+Application owns `IBankProvider` and provider-independent account/transaction/statement result models. Infrastructure owns `FakeBankProvider`, which:
+
+- unwraps provider `ServiceResult<T>` responses;
+- maps FakeBank numeric enums into Application enums;
+- maps provider currency strings into `CurrencyCode`;
+- propagates `X-Correlation-Id`;
+- keeps provider DTOs out of Domain/Application;
+- classifies network, timeout and 5xx failures as retryable;
+- never retries a financial POST by itself.
+
+The provider base URL is a deployment value at `FinWallet:Integrations:FakeBank:BaseUrl` and the typed HttpClient has a fixed short timeout.
 
 ## FakeFraud.Api
 
-The service is controller-based and currently exposes a ServiceResult liveness endpoint. Planned contract responsibilities:
+FakeFraud is an external fraud-provider simulator and remains independent from FinWallet internal fraud rules.
 
-- evaluate transaction/customer/device/merchant dummy risk signals;
-- return `Allow`, `Review` or `Deny` plus provider reference/reasons;
-- support slow response, timeout and provider failure simulation;
-- remain independent of FinWallet internal fraud rules.
-
-FinWallet combines internal and external fraud results using an explicit decision policy. High-risk financial operations fail closed when required fraud evaluation is unavailable.
+`POST /api/v1/fraud/evaluate` returns `ServiceResult<FraudEvaluationResponse>` with deterministic `Allow`, `Review` or `Deny` behavior. FinWallet Infrastructure maps this into the provider-independent `IExternalFraudProvider` boundary. Internal and external fraud decisions are combined by `FraudDecisionPolicy`; an external Allow never overrides an internal Deny.
 
 ## FakeCutoff.Api
 
 ### POST `/api/v1/cutoffs/evaluate`
 
-Implemented as `CutoffController`. It returns `ServiceResult<CutoffEvaluationResponse>` and owns:
-
-- business hours;
-- timezone interpretation;
-- weekends;
-- simulated official-holiday seed data;
-- processing date;
-- settlement date;
-- bank/country/currency/transaction-type cutoff rules.
-
-FinWallet sends transaction context and consumes the returned processing/settlement decision. FinWallet does not duplicate holiday or cutoff calculations internally.
+Implemented as `CutoffController`. It returns `ServiceResult<CutoffEvaluationResponse>` and owns business hours, timezone interpretation, weekends, simulated holiday seed data, processing date, settlement date and bank/country/currency/transaction-type cutoff rules.
 
 The current holiday data is deterministic simulator data, not a production/legal holiday source.
 
@@ -103,14 +97,6 @@ The current holiday data is deterministic simulator data, not a production/legal
 
 ### POST `/api/v1/campaigns/evaluate`
 
-Implemented as `CampaignController`. It returns `ServiceResult<CampaignEvaluationResponse>` and owns:
-
-- merchant/campaign eligibility;
-- minimum transaction amount;
-- discount type/value;
-- maximum discount;
-- campaign sponsor identity (`Platform` or `Merchant`).
+Implemented as `CampaignController`. It returns `ServiceResult<CampaignEvaluationResponse>` and owns merchant/campaign eligibility, minimum transaction amount, discount type/value, maximum discount and campaign sponsor identity.
 
 FinWallet remains responsible for accounting. A campaign response may calculate the discount, but the FinWallet ledger determines who funds that discount and ensures the merchant/customer/system entries remain balanced.
-
-The system must not silently charge an undiscounted amount when a customer-confirmed discounted transaction cannot be revalidated.

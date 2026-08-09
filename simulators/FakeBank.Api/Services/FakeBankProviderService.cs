@@ -80,6 +80,21 @@ public sealed class FakeBankProviderService
     }
 
     /// <summary>
+    /// TR: Harici banka hesabının güncel provider durumunu finansal state değiştirmeden döndürür; pending hesap açılışlarının polling ile izlenmesini sağlar.
+    /// EN: Returns current provider state of an external bank account without mutating financial state, enabling polling of pending account openings.
+    /// </summary>
+    /// <param name="accountId">TR: Sorgulanacak provider hesap kimliği. EN: Provider account identifier to query.</param>
+    /// <returns>TR: Güncel provider hesap sonucunu döndürür. EN: Returns current provider account result.</returns>
+    public OpenAccountResponse GetAccount(Guid accountId)
+    {
+        if (!_accounts.TryGetValue(accountId, out var account)) throw new KeyNotFoundException("External bank account was not found.");
+        lock (GetAccountLock(accountId))
+        {
+            return ToAccountResponse(account);
+        }
+    }
+
+    /// <summary>
     /// TR: Deposit/Withdrawal provider isteğini idempotent olarak oluşturur; eşzamanlı aynı request key isteklerini serialize eder ve pending değilse finansal etkiyi account lock altında yalnızca bir kez uygular.
     /// EN: Creates a Deposit/Withdrawal provider request idempotently, serializes concurrent requests using the same request key and, when not pending, applies the financial effect exactly once under the account lock.
     /// </summary>

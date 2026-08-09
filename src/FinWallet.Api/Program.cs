@@ -2,6 +2,7 @@ using System.Text;
 using FinWallet.Api.Configuration;
 using FinWallet.Api.Errors;
 using FinWallet.Application.Authentication;
+using FinWallet.Application.Banking;
 using FinWallet.Application.Communication;
 using FinWallet.Application.Fraud;
 using FinWallet.Application.Registration;
@@ -9,6 +10,7 @@ using FinWallet.Domain.Fraud;
 using FinWallet.Domain.Fraud.Rules;
 using FinWallet.Domain.Registration;
 using FinWallet.Infrastructure.Authentication;
+using FinWallet.Infrastructure.Banking;
 using FinWallet.Infrastructure.Communication;
 using FinWallet.Infrastructure.Fraud;
 using FinWallet.Infrastructure.Persistence.Redis;
@@ -43,6 +45,9 @@ var fakeCommunicationBaseUri = IntegrationUriFactory.CreateRequiredBaseUri(
 var fakeFraudBaseUri = IntegrationUriFactory.CreateRequiredBaseUri(
     builder.Configuration["FinWallet:Integrations:FakeFraud:BaseUrl"],
     "FinWallet:Integrations:FakeFraud:BaseUrl");
+var fakeBankBaseUri = IntegrationUriFactory.CreateRequiredBaseUri(
+    builder.Configuration["FinWallet:Integrations:FakeBank:BaseUrl"],
+    "FinWallet:Integrations:FakeBank:BaseUrl");
 
 var sqlSettings = new SqlServerSettings(sqlConnectionString);
 var otpSecuritySettings = new RegistrationOtpSecuritySettings(registrationOtpPepper);
@@ -89,6 +94,11 @@ builder.Services.AddHttpClient<IExternalFraudProvider, FakeFraudProvider>(client
 {
     client.BaseAddress = fakeFraudBaseUri;
     client.Timeout = TimeSpan.FromSeconds(2);
+});
+builder.Services.AddHttpClient<IBankProvider, FakeBankProvider>(client =>
+{
+    client.BaseAddress = fakeBankBaseUri;
+    client.Timeout = TimeSpan.FromSeconds(3);
 });
 
 builder.Services
