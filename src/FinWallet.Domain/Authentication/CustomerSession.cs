@@ -7,6 +7,12 @@ namespace FinWallet.Domain.Authentication;
 public sealed class CustomerSession
 {
     /// <summary>
+    /// TR: Cihaz/uygulama örneği kimliğinin abuse veya gereksiz storage büyümesi oluşturmaması için kabul edilen maksimum karakter sayısını tanımlar.
+    /// EN: Defines the maximum accepted device/application-instance identifier length to prevent abuse or unnecessary storage growth.
+    /// </summary>
+    private const int MaximumDeviceIdLength = 128;
+
+    /// <summary>
     /// TR: Kalıcılık katmanının session nesnesini yeniden oluşturması için ayrılmış kurucudur.
     /// EN: Constructor reserved for persistence materialization of the session object.
     /// </summary>
@@ -28,8 +34,8 @@ public sealed class CustomerSession
     /// EN: Customer identifier to which the session belongs.
     /// </param>
     /// <param name="deviceId">
-    /// TR: İstemci tarafından üretilen veya normalize edilen cihaz/uygulama örneği kimliği.
-    /// EN: Device/application-instance identifier generated or normalized by the client.
+    /// TR: İstemci tarafından üretilen veya normalize edilen cihaz/uygulama örneği kimliği; boş olamaz ve 128 karakteri aşamaz.
+    /// EN: Device/application-instance identifier generated or normalized by the client; it cannot be empty or exceed 128 characters.
     /// </param>
     /// <param name="createdAt">
     /// TR: Oturumun oluşturulduğu UTC zaman bilgisi.
@@ -62,6 +68,12 @@ public sealed class CustomerSession
 
         ArgumentException.ThrowIfNullOrWhiteSpace(deviceId);
 
+        var normalizedDeviceId = deviceId.Trim();
+        if (normalizedDeviceId.Length > MaximumDeviceIdLength)
+        {
+            throw new ArgumentException($"Device identifier cannot exceed {MaximumDeviceIdLength} characters.", nameof(deviceId));
+        }
+
         if (expiresAt <= createdAt)
         {
             throw new ArgumentException("Session expiration must be after creation time.", nameof(expiresAt));
@@ -71,7 +83,7 @@ public sealed class CustomerSession
         {
             Id = id,
             CustomerId = customerId,
-            DeviceId = deviceId.Trim(),
+            DeviceId = normalizedDeviceId,
             CreatedAt = createdAt,
             LastActivityAt = createdAt,
             ExpiresAt = expiresAt
