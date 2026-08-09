@@ -28,7 +28,7 @@ public sealed class SqlWalletStore : IWalletStore
     public async Task<Wallet?> FindOwnedAsync(Guid walletId, Guid customerId, CancellationToken cancellationToken)
     {
         if (walletId == Guid.Empty) throw new ArgumentException("Wallet identifier cannot be empty.", nameof(walletId));
-        if (customerId == Guid.Empty) throw new ArgumentException("Customer identifier cannot be empty.", nameof(customerId));
+        ValidateCustomerId(customerId);
 
         const string sql = """
             SELECT Id, CustomerId, Currency, AvailableBalance, BlockedBalance, Status, CreatedAt
@@ -47,7 +47,55 @@ public sealed class SqlWalletStore : IWalletStore
     }
 
     /// <inheritdoc />
-    public async Task InsertAsync(Wallet wallet, CancellationToken cancellationToken)
+    public async Task<Wallet?> FindByCurrencyAsync(Guid customerId, CurrencyCode currency, CancellationToken cancellationToken)
+    {
+        ValidateCustomerId(customerId);
+
+        const string sql = """
+            SELECT Id, CustomerId, Currency, AvailableBalance, BlockedBalance, Status, CreatedAt
+            FROM dbo.Wallets
+            WHERE CustomerId = @CustomerId AND Currency = @Currency;
+            """;
+
+        await using var connection = _connectionFactory.Create();
+        await connection.OpenAsync(cancellationToken);
+        await using var command = new SqlCommand(sql, connection);
+        command.Parameters.Add("@CustomerId", SqlDbType.UniqueIdentifier).Value = customerId;
+        command.Parameters.Add("@Currency", SqlDbType.TinyInt).Value = (byte)currency;
+
+        await using var reader = await command.ExecuteReaderAsync(CommandBehavior.SingleRow, cancellationToken);
+        return await reader.ReadAsync(cancellationToken) ? ReadWallet(reader) : null;
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyCollection<Wallet>> ListOwnedAsync(Guid customerId, CancellationToken cancellationToken)
+    {
+        ValidateCustomerId(customerId);
+
+        const string sql = """
+            SELECT Id, CustomerId, Currency, AvailableBalance, BlockedBalance, Status, CreatedAt
+            FROM dbo.Wallets
+            WHERE CustomerId = @CustomerId
+            ORDER BY Currency, CreatedAt, Id;
+            """;
+
+        await using var connection = _connectionFactory.Create();
+        await connection.OpenAsync(cancellationToken);
+        await using var command = new SqlCommand(sql, connection);
+        command.Parameters.Add("@CustomerId", SqlDbType.UniqueIdentifier).Value = customerId;
+
+        var wallets = new List<Wallet>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            wallets.Add(ReadWallet(reader));
+        }
+
+        return wallets;
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> TryInsertAsync(Wallet wallet, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(wallet);
 
@@ -64,17 +112,19 @@ public sealed class SqlWalletStore : IWalletStore
         command.Parameters.Add("@Id", SqlDbType.UniqueIdentifier).Value = wallet.Id;
         command.Parameters.Add("@CustomerId", SqlDbType.UniqueIdentifier).Value = wallet.CustomerId;
         command.Parameters.Add("@Currency", SqlDbType.TinyInt).Value = (byte)wallet.Currency;
-        command.Parameters.Add("@AvailableBalance", SqlDbType.Decimal).Value = wallet.AvailableBalance;
-        command.Parameters["@AvailableBalance"].Precision = 19;
-        command.Parameters["@AvailableBalance"].Scale = 4;
-        command.Parameters.Add("@BlockedBalance", SqlDbType.Decimal).Value = wallet.BlockedBalance;
-        command.Parameters["@BlockedBalance"].Precision = 19;
-        command.Parameters["@BlockedBalance"].Scale = 4;
+        AddDecimalParameter(command, "@AvailableBalance", wallet.AvailableBalance);
+        AddDecimalParameter(command, "@BlockedBalance", wallet.BlockedBalance);
         command.Parameters.Add("@Status", SqlDbType.TinyInt).Value = (byte)wallet.Status;
         command.Parameters.Add("@CreatedAt", SqlDbType.DateTimeOffset).Value = wallet.CreatedAt;
 
-        var affectedRows = await command.ExecuteNonQueryAsync(cancellationToken);
-        if (affectedRows != 1) throw new InvalidOperationException("Wallet insert did not affect exactly one row.");
+        try
+        {
+            return await command.ExecuteNonQueryAsync(cancellationToken) == 1;
+        }
+        catch (SqlException exception) when (exception.Number is 2601 or 2627)
+        {
+            return false;
+        }
     }
 
     /// <summary>
@@ -93,5 +143,24 @@ public sealed class SqlWalletStore : IWalletStore
             reader.GetDecimal(reader.GetOrdinal("BlockedBalance")),
             (WalletStatus)reader.GetByte(reader.GetOrdinal("Status")),
             reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("CreatedAt")));
+    }
+
+    /// <summary>TR: DECIMAL(19,4) finansal SQL parametresi ekler. EN: Adds a DECIMAL(19,4) financial SQL parameter.</summary>
+    /// <param name="command">TR: Parametre eklenecek SQL komutu. EN: SQL command receiving the parameter.</param>
+    /// <param name="name">TR: SQL parametre adı. EN: SQL parameter name.</param>
+    /// <param name="value">TR: Decimal finansal değer. EN: Decimal financial value.</param>
+    private static void AddDecimalParameter(SqlCommand command, string name, decimal value)
+    {
+        var parameter = command.Parameters.Add(name, SqlDbType.Decimal);
+        parameter.Precision = 19;
+        parameter.Scale = 4;
+        parameter.Value = value;
+    }
+
+    /// <summary>TR: Customer kimliğinin boş olmadığını doğrular. EN: Validates that the customer identifier is not empty.</summary>
+    /// <param name="customerId">TR: Doğrulanacak customer kimliği. EN: Customer identifier to validate.</param>
+    private static void ValidateCustomerId(Guid customerId)
+    {
+        if (customerId == Guid.Empty) throw new ArgumentException("Customer identifier cannot be empty.", nameof(customerId));
     }
 }
