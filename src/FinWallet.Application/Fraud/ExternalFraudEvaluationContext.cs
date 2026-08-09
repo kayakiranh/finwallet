@@ -21,6 +21,7 @@ public sealed class ExternalFraudEvaluationContext
     /// <param name="transactionCountLastFiveMinutes">TR: Son beş dakikadaki işlem adedi. EN: Transaction count during the previous five minutes.</param>
     /// <param name="amountLastTwentyFourHours">TR: Son yirmi dört saatteki toplam işlem tutarı. EN: Total transaction amount during the previous twenty-four hours.</param>
     /// <param name="merchantId">TR: Merchant işlemlerinde PII içermeyen merchant referansı; diğer işlemlerde null. EN: Non-PII merchant reference for merchant transactions, otherwise null.</param>
+    /// <param name="correlationId">TR: Transaction kimliğinden ayrı tutulan ve dış HTTP çağrısına taşınan request correlation kimliği. EN: Request-correlation identifier kept separate from the transaction identifier and propagated to the external HTTP call.</param>
     public ExternalFraudEvaluationContext(
         Guid transactionReference,
         Guid customerReference,
@@ -32,7 +33,8 @@ public sealed class ExternalFraudEvaluationContext
         bool isNewDevice,
         int transactionCountLastFiveMinutes,
         decimal amountLastTwentyFourHours,
-        string? merchantId)
+        string? merchantId,
+        string correlationId)
     {
         if (transactionReference == Guid.Empty) throw new ArgumentException("Transaction reference cannot be empty.", nameof(transactionReference));
         if (customerReference == Guid.Empty) throw new ArgumentException("Customer reference cannot be empty.", nameof(customerReference));
@@ -40,6 +42,7 @@ public sealed class ExternalFraudEvaluationContext
         ArgumentException.ThrowIfNullOrWhiteSpace(currency);
         ArgumentException.ThrowIfNullOrWhiteSpace(countryCode);
         ArgumentException.ThrowIfNullOrWhiteSpace(deviceReference);
+        ArgumentException.ThrowIfNullOrWhiteSpace(correlationId);
         if (amount <= 0) throw new ArgumentOutOfRangeException(nameof(amount));
         if (transactionCountLastFiveMinutes < 0) throw new ArgumentOutOfRangeException(nameof(transactionCountLastFiveMinutes));
         if (amountLastTwentyFourHours < 0) throw new ArgumentOutOfRangeException(nameof(amountLastTwentyFourHours));
@@ -55,6 +58,7 @@ public sealed class ExternalFraudEvaluationContext
         TransactionCountLastFiveMinutes = transactionCountLastFiveMinutes;
         AmountLastTwentyFourHours = amountLastTwentyFourHours;
         MerchantId = string.IsNullOrWhiteSpace(merchantId) ? null : merchantId.Trim();
+        CorrelationId = correlationId.Trim();
     }
 
     /// <summary>TR: FinWallet transaction referansını döndürür. EN: Gets the FinWallet transaction reference.</summary>
@@ -89,4 +93,7 @@ public sealed class ExternalFraudEvaluationContext
 
     /// <summary>TR: İsteğe bağlı merchant referansını döndürür. EN: Gets the optional merchant reference.</summary>
     public string? MerchantId { get; }
+
+    /// <summary>TR: Dış provider çağrısına taşınacak ve transaction kimliğinden ayrı tutulan correlation kimliğini döndürür. EN: Gets the correlation identifier propagated to the external provider call and kept separate from the transaction identifier.</summary>
+    public string CorrelationId { get; }
 }
