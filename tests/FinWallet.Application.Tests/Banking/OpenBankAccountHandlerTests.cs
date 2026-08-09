@@ -2,6 +2,7 @@ using FinWallet.Application.Banking;
 using FinWallet.Application.Wallets;
 using FinWallet.Domain.Wallets;
 using Moq;
+using Xunit;
 
 namespace FinWallet.Application.Tests.Banking;
 
