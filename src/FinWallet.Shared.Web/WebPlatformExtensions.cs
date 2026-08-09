@@ -3,6 +3,7 @@ using System.Text;
 using System.Threading.RateLimiting;
 using FinWallet.Shared.Contracts;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Configuration;
