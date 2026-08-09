@@ -114,6 +114,14 @@ Use where appropriate:
 - Fail-fast validation
 - Explicit fail-open/fail-closed integration policies
 
+## Code documentation standard
+- Every class, record, struct, enum, interface, method, constructor and property must have an XML documentation comment, regardless of public/internal/private visibility when practical.
+- Every `<summary>` must contain both Turkish and English descriptions using `TR:` and `EN:` prefixes.
+- Method parameters, return values, generic type parameters and meaningful exceptions must also be documented in Turkish and English.
+- Comments must explain intent, business meaning and important constraints; do not merely restate the identifier name.
+- Public APIs compile with XML documentation generation enabled and CS1591 treated as an error.
+- Generated code is the only default exception; any additional exception requires an explicit ADR or documented justification.
+
 ## Testing expectations
 Every financial feature must include relevant unit/integration/end-to-end tests. Critical scenarios include:
 - concurrent overspend attempts
