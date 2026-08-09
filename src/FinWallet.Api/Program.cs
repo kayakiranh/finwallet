@@ -35,7 +35,7 @@ ArgumentException.ThrowIfNullOrWhiteSpace(jwtSigningKey);
 var fakeCommunicationBaseUrl = builder.Configuration["FinWallet:Integrations:FakeCommunication:BaseUrl"];
 ArgumentException.ThrowIfNullOrWhiteSpace(fakeCommunicationBaseUrl);
 
-var normalizedFakeCommunicationBaseUrl = fakeCommunicationBaseUrl.EndsWith('/', StringComparison.Ordinal)
+var normalizedFakeCommunicationBaseUrl = fakeCommunicationBaseUrl.EndsWith("/", StringComparison.Ordinal)
     ? fakeCommunicationBaseUrl
     : $"{fakeCommunicationBaseUrl}/";
 var fakeCommunicationBaseUri = new Uri(normalizedFakeCommunicationBaseUrl, UriKind.Absolute);
