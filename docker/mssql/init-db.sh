@@ -55,7 +55,8 @@ apply_migration() {
   fi
 
   echo "Applying migration ${version}: ${file}"
-  run_query -d FinWallet -Q "SET ANSI_NULLS ON; SET QUOTED_IDENTIFIER ON;" -i "/database/${file}"
+  # -I in SQLCMD_COMMON enables QUOTED_IDENTIFIER for filtered/computed index creation.
+  run_query -d FinWallet -i "/database/${file}"
   run_query -d FinWallet -Q "INSERT INTO dbo.SchemaVersions (Version) VALUES ('${version}');"
 }
 
