@@ -6,6 +6,7 @@ using FinWallet.Application.Banking;
 using FinWallet.Application.Communication;
 using FinWallet.Application.Fraud;
 using FinWallet.Application.Registration;
+using FinWallet.Application.Wallets;
 using FinWallet.Domain.Fraud;
 using FinWallet.Domain.Fraud.Rules;
 using FinWallet.Domain.Registration;
@@ -15,6 +16,7 @@ using FinWallet.Infrastructure.Communication;
 using FinWallet.Infrastructure.Fraud;
 using FinWallet.Infrastructure.Persistence.Redis;
 using FinWallet.Infrastructure.Persistence.SqlServer;
+using FinWallet.Shared.Contracts;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using StackExchange.Redis;
@@ -61,6 +63,8 @@ builder.Services.AddSingleton(sqlSettings);
 builder.Services.AddSingleton<SqlConnectionFactory>();
 builder.Services.AddScoped<ICustomerRegistrationStore, SqlCustomerRegistrationStore>();
 builder.Services.AddScoped<IAuthenticationStore, SqlAuthenticationStore>();
+builder.Services.AddScoped<IWalletStore, SqlWalletStore>();
+builder.Services.AddScoped<IBankAccountStore, SqlBankAccountStore>();
 
 builder.Services.AddSingleton(otpSecuritySettings);
 builder.Services.AddSingleton<IConnectionMultiplexer>(
@@ -84,6 +88,7 @@ builder.Services.AddScoped<RegisterCustomerHandler>();
 builder.Services.AddScoped<VerifyRegistrationOtpHandler>();
 builder.Services.AddScoped<LoginCustomerHandler>();
 builder.Services.AddScoped<RefreshSessionHandler>();
+builder.Services.AddScoped<OpenBankAccountHandler>();
 
 builder.Services.AddHttpClient<ICommunicationGateway, FakeCommunicationGateway>(client =>
 {
@@ -119,6 +124,28 @@ builder.Services
             RequireSignedTokens = true,
             ValidAlgorithms = new[] { SecurityAlgorithms.HmacSha256 },
             ClockSkew = TimeSpan.FromSeconds(30)
+        };
+        options.Events = new JwtBearerEvents
+        {
+            OnChallenge = async context =>
+            {
+                context.HandleResponse();
+                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                await context.Response.WriteAsJsonAsync(
+                    ServiceResult<object>.Failure(
+                        "UNAUTHORIZED",
+                        "A valid access token is required."),
+                    context.HttpContext.RequestAborted);
+            },
+            OnForbidden = async context =>
+            {
+                context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                await context.Response.WriteAsJsonAsync(
+                    ServiceResult<object>.Failure(
+                        "FORBIDDEN",
+                        "The authenticated customer is not allowed to perform this operation."),
+                    context.HttpContext.RequestAborted);
+            }
         };
     });
 builder.Services.AddAuthorization();

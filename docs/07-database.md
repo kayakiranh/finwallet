@@ -2,198 +2,159 @@
 
 ## Source-of-truth policy
 
-MSSQL is the durable source of truth for customer, authentication and all future financial state. Redis is not a replacement for MSSQL and is never sufficient to guarantee money correctness.
+MSSQL is the durable source of truth for customer, authentication and financial state. Redis is not a replacement for MSSQL and is never sufficient to guarantee money correctness.
 
-The initial persistence implementation uses explicit parameterized `Microsoft.Data.SqlClient` commands rather than EF Core or a generic repository framework. This keeps transaction boundaries and concurrency-sensitive SQL visible.
+Persistence uses explicit parameterized `Microsoft.Data.SqlClient` commands rather than EF Core or a generic repository framework. This keeps transaction boundaries and concurrency-sensitive SQL visible.
 
 ## Authentication schema
 
-The initial schema is defined in `database/001_authentication_schema.sql`.
+`database/001_authentication_schema.sql` defines:
 
-### Customers
+- `Customers`;
+- `CustomerCredentials`;
+- `CustomerSessions`;
+- `RefreshTokens`.
 
-Purpose: intentionally small end-customer identity/contact/lifecycle record.
+Phone uniqueness, login lock state, session lifecycle and single-use refresh-token rotation are enforced with database constraints and conditional updates. Raw passwords and raw refresh tokens are never stored.
+
+## Financial account schema
+
+`database/002_financial_accounts_schema.sql` introduces the durable Wallet and BankAccount foundation.
+
+### Wallets
 
 Key fields:
 
-- `Id` — primary key;
-- `CountryCode` — two-letter registration country;
-- `PhoneNumber` — normalized international phone number;
-- `Email` — optional contact email;
-- `Status` — customer lifecycle state;
+- `Id` — internal Wallet primary key;
+- `CustomerId` — owner FK to Customers;
+- `Currency` — TRY/USD/EUR enum value;
+- `AvailableBalance` — non-negative `DECIMAL(19,4)`;
+- `BlockedBalance` — non-negative `DECIMAL(19,4)`;
+- `Status` — Active/Blocked/Closed;
 - `CreatedAt`;
 - `RowVersion`.
 
 Important constraints:
 
-- `PhoneNumber` has a unique constraint. This is the final concurrency guarantee against duplicate registrations; application existence checks are not treated as sufficient.
-- `Status` is constrained to supported enum values.
+- `(CustomerId, Currency)` is unique: one wallet per customer/currency;
+- balances cannot be negative at database level;
+- `(Id, CustomerId, Currency)` is additionally unique so BankAccount can reference wallet ownership and currency as one composite relationship.
 
-### CustomerCredentials
+`Wallet.Restore(...)` rehydrates durable state without reflection and rejects negative persisted balances or invalid lifecycle state.
 
-Purpose: password and login-lockout state separated from `Customers`.
+### BankAccounts
 
-Key fields:
-
-- `CustomerId` — PK/FK to `Customers`;
-- `PasswordHash`;
-- `PasswordSalt`;
-- `PasswordHashVersion`;
-- `FailedLoginCount`;
-- `LockedUntil`;
-- `PasswordChangedAt`;
-- `RowVersion`.
-
-Raw passwords are never stored.
-
-### CustomerSessions
-
-Purpose: server-side device/session lifecycle independent of short-lived JWT access tokens.
+A FinWallet `BankAccount` is not a Wallet and is not the financial Ledger. It is the durable internal link between an owned Wallet and an external-bank account.
 
 Key fields:
 
-- `Id`;
-- `CustomerId`;
-- `DeviceId`;
+- `Id` — FinWallet internal BankAccount ID;
+- `CustomerId` — owner customer;
+- `WalletId` — linked internal wallet;
+- `Currency` — same currency as linked wallet;
+- `ExternalAccountId` — provider-generated account ID, nullable while opening has not reached the provider;
+- `ExternalIban` — provider IBAN-like value, nullable together with ExternalAccountId;
+- `Status` — Opening/Active/Rejected/Blocked/Closed;
 - `CreatedAt`;
-- `LastActivityAt`;
-- `ExpiresAt`;
-- `RevokedAt`;
+- `UpdatedAt`;
 - `RowVersion`.
 
-Indexes support customer/session expiration lookup.
+Database invariants:
 
-### RefreshTokens
+- `WalletId` is unique: one BankAccount per Wallet;
+- composite FK `(WalletId, CustomerId, Currency) -> Wallets(Id, CustomerId, Currency)` prevents linking another customer's wallet or a different-currency wallet;
+- ExternalAccountId and ExternalIban must either both be null or both be present;
+- Active/Blocked/Closed states require an external account link;
+- ExternalAccountId and ExternalIban are individually unique when non-null;
+- `UpdatedAt >= CreatedAt`.
 
-Purpose: single-use refresh-token rotation state.
+### BankAccount concurrency
 
-Key fields:
+Creating a BankAccount is race-safe:
 
-- `Id`;
-- `SessionId`;
-- `TokenHash` — SHA-256 hash, never raw token;
-- `CreatedAt`;
-- `ExpiresAt`;
-- `ConsumedAt`;
-- `RevokedAt`;
-- `ReplacedByTokenId` — self-reference to rotation successor;
-- `RowVersion`.
+- application may first check for an existing wallet link;
+- the database `UNIQUE(WalletId)` is the final guarantee;
+- `TryInsertAsync` converts duplicate-key races into a false result;
+- the use case reloads the winning durable BankAccount rather than creating a second external account.
 
-Important constraints:
+Lifecycle/provider updates use compare-and-set against both `Status` and `UpdatedAt`:
 
-- `TokenHash` is unique;
-- token belongs to a session through FK;
-- replacement token uses a self-FK;
-- expiration must be after creation.
+```sql
+UPDATE dbo.BankAccounts
+SET ExternalAccountId = @ExternalAccountId,
+    ExternalIban = @ExternalIban,
+    Status = @Status,
+    UpdatedAt = @UpdatedAt
+WHERE Id = @Id
+  AND CustomerId = @CustomerId
+  AND WalletId = @WalletId
+  AND Currency = @Currency
+  AND Status = @ExpectedStatus
+  AND UpdatedAt = @ExpectedUpdatedAt;
+```
 
-## Transaction boundaries
+Using `UpdatedAt` in addition to status matters because provider identity can be attached while the lifecycle remains `Opening`. A stale `Opening` snapshot therefore cannot overwrite a newer `Opening` snapshot.
+
+## Bank account opening transaction boundary
+
+External HTTP never runs inside a FinWallet SQL transaction.
+
+```text
+1. Load owned Wallet
+2. Find or insert durable BankAccount(Opening)
+3. SQL operation completes
+4. Call external bank using deterministic provider RequestKey
+5. Validate provider account identity/currency
+6. Apply provider state in memory
+7. CAS update BankAccount using expected Status + UpdatedAt
+```
+
+The provider request key is derived from the durable internal BankAccount ID. If the provider creates the account but FinWallet loses the response, the next attempt sends the same key and receives the same provider account rather than creating a duplicate.
+
+## Authentication transaction boundaries
 
 ### Registration
 
-`Customer` and `CustomerCredential` are inserted in one short `READ COMMITTED` transaction.
-
-```text
-BEGIN
-  INSERT Customer
-  INSERT CustomerCredential
-COMMIT
-```
-
-OTP generation and FakeCommunication HTTP calls happen only after the SQL transaction has completed.
+Customer + CustomerCredential are inserted in one short transaction. OTP/provider communication occurs only after commit.
 
 ### Successful login
 
-Credential lockout-reset state, new `CustomerSession` and first `RefreshToken` hash are written in one SQL transaction.
+Credential reset, CustomerSession and initial RefreshToken hash are persisted atomically.
 
 ### Refresh rotation
 
-Refresh rotation is implemented as database compare-and-set behavior:
-
-```text
-BEGIN
-  INSERT replacement refresh token
-
-  UPDATE old refresh token
-     SET ConsumedAt = ...,
-         ReplacedByTokenId = replacement
-   WHERE Id = ...
-     AND SessionId = ...
-     AND TokenHash = ...
-     AND ConsumedAt IS NULL
-     AND RevokedAt IS NULL
-
-  IF affected rows != 1
-      ROLLBACK and report lost rotation race
-
-  UPDATE session LastActivityAt
-COMMIT
-```
-
-The replacement is inserted first because the old token has a foreign key to `ReplacedByTokenId`. If the conditional consume loses a concurrency race, the entire transaction rolls back, including the replacement insert.
-
-The Application handler treats a lost rotation race as token reuse/replay and revokes the associated session/token family.
+The old refresh token is consumed with compare-and-set semantics. A lost concurrent rotation rolls back the replacement insert and is treated as replay/reuse.
 
 ### Session revoke
 
-Session `RevokedAt` and all refresh-token records for the session are updated in one transaction. The operation is idempotent through `COALESCE(RevokedAt, @RevokedAt)` semantics.
+Session and associated refresh tokens are revoked in one transaction with idempotent timestamp semantics.
 
 ## Domain materialization
 
-Infrastructure does not use reflection to mutate private setters. Persisted rows are rehydrated through controlled domain `Restore(...)` factories:
+Infrastructure rehydrates through controlled factories rather than reflection:
 
 - `Customer.Restore`;
 - `CustomerCredential.Restore`;
 - `CustomerSession.Restore`;
-- `RefreshToken.Restore`.
-
-These factories validate persisted lifecycle consistency and reject obviously corrupted state rather than silently accepting it.
+- `RefreshToken.Restore`;
+- `Wallet.Restore`;
+- `BankAccount.Restore`.
 
 ## Redis OTP state
 
-Redis stores only transient registration OTP challenge state.
+Redis stores only transient registration OTP challenge state. It never contains the raw OTP and cannot activate a customer by itself. Redis remains non-authoritative for financial correctness.
 
-Keys:
+## Remaining financial schema
 
-```text
-finwallet:registration:otp:{customerId}
-finwallet:registration:otp-cooldown:{customerId}
-```
+Later phases still need at minimum:
 
-The OTP key is a Redis hash containing:
-
-- `digest` — customer-bound HMAC-SHA256 digest;
-- `attempts` — failed verification count.
-
-Fixed policy:
-
-- TTL: 5 minutes;
-- maximum failed attempts: 5;
-- resend cooldown: 30 seconds.
-
-Lua scripts atomically implement:
-
-- cooldown check + challenge replacement + TTL;
-- digest comparison + attempt increment + challenge deletion on success/exhaustion.
-
-Redis does not contain the raw OTP. Redis unavailability fails registration verification safely and cannot activate a customer by itself.
-
-## Future financial schema
-
-Later phases will add at minimum:
-
-- Wallets;
-- BankAccounts;
 - FinancialTransactions;
-- LedgerAccounts;
-- LedgerJournals;
-- LedgerEntries;
+- Ledger persistence for the already implemented double-entry domain;
 - IdempotencyRecords;
-- OutboxMessages;
-- InboxMessages;
+- OutboxMessages / InboxMessages;
 - FraudEvents;
 - Merchants;
-- ReconciliationRuns;
-- ReconciliationIssues;
+- ReconciliationRuns / ReconciliationIssues;
 - AuditEvents.
 
-Financial schema changes must preserve double-entry balance invariants and durable idempotency guarantees.
+All future financial schema changes must preserve double-entry invariants, durable idempotency and concurrency-safe state transitions.

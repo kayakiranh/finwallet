@@ -1,4 +1,5 @@
 using FinWallet.Application.Authentication;
+using FinWallet.Application.Banking;
 using FinWallet.Application.Registration;
 using FinWallet.Domain.Registration;
 using FinWallet.Shared.Contracts;
@@ -7,8 +8,8 @@ using Microsoft.AspNetCore.Diagnostics;
 namespace FinWallet.Api.Errors;
 
 /// <summary>
-/// TR: Beklenen registration/authentication hatalarını stabil HTTP status ve ServiceResult hata kodlarına dönüştürür; beklenmeyen exception ayrıntılarını istemciye sızdırmaz.
-/// EN: Converts expected registration/authentication errors into stable HTTP statuses and ServiceResult error codes while preventing unexpected exception details from leaking to clients.
+/// TR: Beklenen application/domain hatalarını stabil HTTP status ve ServiceResult hata kodlarına dönüştürür; beklenmeyen exception ayrıntılarını istemciye sızdırmaz.
+/// EN: Converts expected application/domain failures into stable HTTP statuses and ServiceResult error codes while preventing unexpected exception details from leaking to clients.
 /// </summary>
 public sealed class ApiExceptionHandler : IExceptionHandler
 {
@@ -78,6 +79,22 @@ public sealed class ApiExceptionHandler : IExceptionHandler
                 StatusCodes.Status401Unauthorized,
                 "INVALID_REFRESH_TOKEN",
                 "The refresh token is invalid or no longer usable."),
+            BankAccountWalletNotFoundException => new ApiErrorDescriptor(
+                StatusCodes.Status404NotFound,
+                "WALLET_NOT_FOUND",
+                "The wallet was not found."),
+            BankAccountConcurrencyException => new ApiErrorDescriptor(
+                StatusCodes.Status409Conflict,
+                "BANK_ACCOUNT_CONFLICT",
+                "The bank account state changed concurrently. Retry the operation."),
+            ExternalBankProviderException providerException when providerException.IsRetryable => new ApiErrorDescriptor(
+                StatusCodes.Status503ServiceUnavailable,
+                providerException.Code,
+                providerException.Message),
+            ExternalBankProviderException providerException => new ApiErrorDescriptor(
+                StatusCodes.Status502BadGateway,
+                providerException.Code,
+                providerException.Message),
             ArgumentException => new ApiErrorDescriptor(
                 StatusCodes.Status400BadRequest,
                 "INVALID_REQUEST",
