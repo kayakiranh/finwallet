@@ -4,95 +4,129 @@
 
 | Technology | Version/Policy | Purpose |
 |---|---|---|
-| .NET | 8 | Runtime and application platform |
-| ASP.NET Core | 8 | Main REST API and fake provider APIs |
+| .NET | 8 | Runtime/application platform |
+| ASP.NET Core | 8 | Controller-based Web APIs |
 | C# | 12 | Application language |
+| YARP | 2.3.0 | Reverse proxy, routing, health and load balancing |
+| Swagger / Swashbuckle | 10.2.3 | Per-service OpenAPI/Swagger generation and UI |
 | MSSQL | Microsoft.Data.SqlClient 7.0.2 | Durable persistence and financial source of truth |
-| Redis | StackExchange.Redis 3.0.17 | Transient distributed state, OTP, fraud counters, idempotency hot cache and coordination |
-| JWT | ASP.NET Core JwtBearer 8.0.29 | Short-lived access-token authentication without ASP.NET Core Identity |
-| JSON Lines files | Project policy | Masked structured financial/application/audit logging |
-| GitHub | Repository workflow | Source control, issues and pull requests |
-| Codex | Development workflow | Agent-assisted implementation, review and maintenance |
+| Redis | StackExchange.Redis 3.0.17 | Transient distributed OTP/support state |
+| JWT | ASP.NET Core JwtBearer 8.0.29 | Gateway/API bearer authentication |
+| xUnit v3 | 3.2.2 | Unit-test framework |
+| Moq | 4.20.72 | Application-boundary mocks |
+| GitHub | Repository workflow | Source control, issues, pull requests and CI |
 
 ## Package policy
 
-FinWallet does not allow paid or freemium NuGet packages. Package selection follows this order:
+FinWallet does not allow paid/freemium NuGet dependencies.
 
-1. .NET built-in capability.
-2. Microsoft-maintained package when a package is required.
-3. Fully free/open-source third-party package only when it provides clear value and its license is compatible with the project.
+Selection order:
 
-Every new package must be added through central package management in `Directory.Packages.props` and documented in this file before the feature is considered complete.
+1. Built-in .NET/ASP.NET Core functionality.
+2. Microsoft-maintained package where appropriate.
+3. Fully free/open-source third-party package only when it has clear value and compatible licensing.
 
-## Current NuGet inventory
+All versions are centrally pinned in `Directory.Packages.props`.
 
-### Microsoft.AspNetCore.Authentication.JwtBearer
+## Current package inventory
 
-| Field | Decision |
-|---|---|
-| Package | `Microsoft.AspNetCore.Authentication.JwtBearer` |
-| Version | `8.0.29` |
-| License | MIT |
-| Owner project(s) | `FinWallet.Api`, `FinWallet.Infrastructure` |
-| Purpose | ASP.NET Core JWT bearer validation in the API and supported JWT token primitives used by the Infrastructure token issuer |
-| Why required | The Web API must validate signed bearer access tokens using the supported ASP.NET Core authentication stack without ASP.NET Core Identity, and Infrastructure must issue interoperable signed JWT access tokens without implementing the token standard manually. |
-| Alternatives considered | Hand-written JWT parsing/signing/validation was rejected because implementing a security token standard manually adds unnecessary security risk. ASP.NET Core Identity was rejected by explicit project requirement. |
-| Financial/security impact | Security-critical authentication dependency; version must remain on the supported .NET 8 patch line and be reviewed during dependency updates. |
+### Microsoft.AspNetCore.Authentication.JwtBearer — 8.0.29
 
-### Microsoft.Data.SqlClient
+- Purpose: JWT validation at Gateway/API.
+- License: MIT.
+- Used by: `FinWallet.Api`, `FinWallet.Gateway` and token infrastructure dependencies.
+- Security impact: critical authentication path.
+- Alternative rejected: hand-written JWT parsing/signing/validation.
 
-| Field | Decision |
-|---|---|
-| Package | `Microsoft.Data.SqlClient` |
-| Version | `7.0.2` |
-| License | MIT |
-| Owner project(s) | `FinWallet.Infrastructure` |
-| Purpose | Official SQL Server provider used for explicit async SQL commands, transactions and concurrency-sensitive persistence. |
-| Why required | MSSQL is the durable financial source of truth and requires a supported SQL Server protocol/provider. |
-| Alternatives considered | EF Core was not selected for the first persistence slice because auth/financial concurrency SQL should remain explicit. Dapper was not added because the initial store does not require an additional mapping abstraction over `Microsoft.Data.SqlClient`. |
-| Financial/security impact | Critical persistence dependency. SQL parameters are mandatory and transaction boundaries remain explicit. |
+### Microsoft.Data.SqlClient — 7.0.2
 
-`Microsoft.Data.SqlClient 7.0.2` is Microsoft-maintained, MIT licensed and targets .NET 8.
+- Purpose: explicit async SQL, transactions and locking-sensitive financial persistence.
+- License: MIT.
+- Used by: `FinWallet.Infrastructure`.
+- MSSQL remains the durable financial authority.
+- SQL values must be parameterized.
+- EF/generic repository abstractions are deliberately not added to the atomic money path.
 
-### StackExchange.Redis
+### StackExchange.Redis — 3.0.17
 
-| Field | Decision |
-|---|---|
-| Package | `StackExchange.Redis` |
-| Version | `3.0.17` |
-| License | MIT |
-| Owner project(s) | `FinWallet.Infrastructure` |
-| Purpose | Redis access for OTP state, velocity counters, hot idempotency coordination and other transient distributed state requiring atomic Redis operations. |
-| Why required | The built-in distributed-cache abstraction does not expose the atomic compare/script primitives required by the planned OTP and concurrency-sensitive transient workflows. |
-| Alternatives considered | `IDistributedCache` alone was rejected for these operations because it intentionally exposes a simpler cache abstraction. Redis remains optional for financial correctness; durable money state is never stored here. |
-| Financial/security impact | Security-sensitive for OTP and rate/velocity state, but never the financial source of truth. Redis unavailability must fail safely for authentication/fraud operations that depend on it. |
+- Purpose: Redis access for transient OTP/distributed support state with Lua/atomic primitives.
+- License: MIT.
+- Used by: `FinWallet.Infrastructure`.
+- A single `ConnectionMultiplexer` is registered as singleton.
+- Redis never becomes the wallet/ledger/idempotency financial source of truth.
 
-`StackExchange.Redis 3.0.17` is MIT licensed and compatible with .NET 8.
+### Yarp.ReverseProxy — 2.3.0
 
-## Password cryptography
+- Purpose: `FinWallet.Gateway` reverse proxy.
+- License: MIT.
+- Maintainer: Microsoft/dotnet project ecosystem.
+- Capabilities used:
+  - route matching;
+  - route authorization policies;
+  - request transforms;
+  - load balancing;
+  - active/passive health;
+  - destination connection/timeout tuning;
+  - provider path transforms.
+- Why selected: native ASP.NET Core integration and configuration-driven routing without introducing a commercial gateway dependency.
+- Financial impact: not a financial source of truth; gateway outages affect availability but cannot alter ledger correctness.
 
-Password derivation does not add a NuGet dependency. FinWallet uses the .NET `System.Security.Cryptography` one-shot `Rfc2898DeriveBytes.Pbkdf2` API with a fixed PBKDF2-HMAC-SHA512 version-1 scheme, 220,000 iterations, a 32-byte random salt and a 64-byte derived hash. These parameters are security code constants rather than runtime options. A persisted hash-version field exists only for safe future migration.
+### Swashbuckle.AspNetCore — 10.2.3
 
-## Package approval record format
+- Purpose: Swagger/OpenAPI generation and UI for every Web API.
+- License: MIT.
+- Owned through: `FinWallet.Shared.Web`.
+- Swagger is enabled by default in local development and disabled by default in production configuration.
+- API authorization remains enforced independently from documentation visibility.
 
-Every future package entry must include:
+### xunit.v3 — 3.2.2
+
+- Purpose: unit tests.
+- License: Apache-2.0.
+- Used by: `FinWallet.Application.Tests`.
+- Test project uses Microsoft Testing Platform integration for .NET 8.
+- This replaces the previous state where the repository had no test project.
+
+### Moq — 4.20.72
+
+- Purpose: strict mocks for Application orchestration boundaries.
+- License: BSD-3-Clause.
+- Used by: `FinWallet.Application.Tests`.
+- Appropriate for verifying call ordering/avoidance such as "provider must not be called when owned wallet is absent".
+- Not used as a substitute for real MSSQL/Redis/YARP concurrency tests.
+
+## Framework-only capabilities
+
+The following features intentionally do not add separate NuGet packages:
+
+- Kestrel HTTP limits;
+- ASP.NET Core rate limiting;
+- CORS;
+- security headers middleware;
+- `HttpClientFactory` and `SocketsHttpHandler`;
+- PBKDF2-HMAC-SHA512 via `System.Security.Cryptography`;
+- HMAC/SHA-256 primitives;
+- cancellation tokens and `TimeProvider`.
+
+## Password cryptography note
+
+PBKDF2 parameters remain part of credential hash version 1 rather than a loose runtime tuning switch. Existing rows do not persist per-password iteration metadata, so changing the work factor only in appsettings would invalidate existing password verification. A future work-factor increase must use a versioned migration/rehash design.
+
+## Package approval record
+
+Any future package addition must document:
 
 | Field | Required information |
 |---|---|
-| Package | Exact NuGet package ID |
-| Version | Centrally managed version |
-| License | SPDX/license name and compatibility note |
-| Owner project(s) | Projects that reference the package |
-| Purpose | Technical capability provided |
-| Why required | Why built-in .NET functionality is insufficient |
-| Alternatives considered | Native or free alternatives evaluated |
-| Financial/security impact | Whether the dependency is on a critical path |
+| Package | Exact package ID |
+| Version | Centrally pinned version |
+| License | License and compatibility |
+| Owner project(s) | Projects referencing it |
+| Purpose | Capability provided |
+| Why required | Why built-in .NET is insufficient |
+| Alternatives | Native/free alternatives considered |
+| Financial/security impact | Critical-path implications |
 
-## Expected package areas requiring later decisions
+## Next dependency work
 
-The following capabilities still require explicit package decisions during implementation; no package is approved merely by appearing in this list:
-
-- structured file logging
-- test frameworks and test infrastructure
-
-Package versions and licenses must be verified at the time they are introduced because dependency metadata can change.
+No package is pre-approved merely because it is useful. Future candidates such as OpenTelemetry exporters, structured logging providers, containerized integration-test infrastructure or SBOM/vulnerability tooling must go through the same review.
