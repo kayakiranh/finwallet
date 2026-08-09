@@ -20,6 +20,7 @@ x-dotnet-common: &dotnet-common
   environment: &dotnet-environment
     ASPNETCORE_ENVIRONMENT: Docker
     ASPNETCORE_URLS: http://+:8080
+    Urls: http://+:8080
     DOTNET_RUNNING_IN_CONTAINER: "true"
     DOTNET_EnableDiagnostics: "0"
     TZ: Etc/UTC
