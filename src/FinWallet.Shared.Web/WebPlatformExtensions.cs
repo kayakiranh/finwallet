@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading.RateLimiting;
 using FinWallet.Shared.Contracts;
 using Microsoft.AspNetCore.Builder;
@@ -93,7 +95,7 @@ public static class WebPlatformExtensions
             {
                 if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
                 {
-                    context.HttpContext.Response.Headers.RetryAfter = Math.Ceiling(retryAfter.TotalSeconds).ToString(System.Globalization.CultureInfo.InvariantCulture);
+                    context.HttpContext.Response.Headers["Retry-After"] = Math.Ceiling(retryAfter.TotalSeconds).ToString(System.Globalization.CultureInfo.InvariantCulture);
                 }
 
                 await context.HttpContext.Response.WriteAsJsonAsync(
@@ -120,6 +122,20 @@ public static class WebPlatformExtensions
         var enableHttpsRedirection = configuration.GetValue("Platform:Security:EnableHttpsRedirection", false);
         var enableSwagger = configuration.GetValue("Platform:Swagger:Enabled", !app.Environment.IsProduction());
         var requireJsonForWrites = configuration.GetValue("Platform:Security:RequireJsonForWriteRequests", true);
+        var requireInternalServiceKey = configuration.GetValue("Platform:Security:RequireInternalServiceKey", false);
+        var internalServiceKey = configuration["Platform:Security:InternalServiceKey"];
+
+        byte[]? expectedInternalKey = null;
+        if (requireInternalServiceKey)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(internalServiceKey);
+            if (Encoding.UTF8.GetByteCount(internalServiceKey) < 32)
+            {
+                throw new InvalidOperationException("Platform internal service key must contain at least 32 UTF-8 bytes.");
+            }
+
+            expectedInternalKey = Encoding.UTF8.GetBytes(internalServiceKey);
+        }
 
         if (enableHsts)
         {
@@ -138,6 +154,18 @@ public static class WebPlatformExtensions
                 context.Response.StatusCode = StatusCodes.Status405MethodNotAllowed;
                 await context.Response.WriteAsJsonAsync(
                     ServiceResult<object>.Failure("METHOD_NOT_ALLOWED", "The HTTP method is not allowed."),
+                    context.RequestAborted);
+                return;
+            }
+
+            if (requireInternalServiceKey &&
+                !context.Request.Path.StartsWithSegments("/health") &&
+                !context.Request.Path.StartsWithSegments("/swagger") &&
+                !HasValidInternalServiceKey(context, expectedInternalKey!))
+            {
+                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                await context.Response.WriteAsJsonAsync(
+                    ServiceResult<object>.Failure("INTERNAL_SERVICE_UNAUTHORIZED", "A valid internal service credential is required."),
                     context.RequestAborted);
                 return;
             }
@@ -163,8 +191,8 @@ public static class WebPlatformExtensions
             context.Response.Headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), payment=()";
             context.Response.Headers["Cross-Origin-Resource-Policy"] = "same-origin";
             context.Response.Headers["X-Permitted-Cross-Domain-Policies"] = "none";
-            context.Response.Headers.CacheControl = "no-store, no-cache";
-            context.Response.Headers.Pragma = "no-cache";
+            context.Response.Headers["Cache-Control"] = "no-store, no-cache";
+            context.Response.Headers["Pragma"] = "no-cache";
 
             if (context.Request.Path.StartsWithSegments("/swagger"))
             {
@@ -188,6 +216,18 @@ public static class WebPlatformExtensions
         }
 
         return app;
+    }
+
+    private static bool HasValidInternalServiceKey(HttpContext context, byte[] expectedKey)
+    {
+        var provided = context.Request.Headers["X-Internal-Service-Key"].FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(provided))
+        {
+            return false;
+        }
+
+        var providedBytes = Encoding.UTF8.GetBytes(provided);
+        return providedBytes.Length == expectedKey.Length && CryptographicOperations.FixedTimeEquals(providedBytes, expectedKey);
     }
 
     private static int ReadInt(IConfiguration configuration, string key, int defaultValue, int min, int max)
