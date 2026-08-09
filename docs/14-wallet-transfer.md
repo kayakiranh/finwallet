@@ -1,19 +1,20 @@
-# Wallet Transfer Flow
+# Wallet Transfer Akışı / Wallet Transfer Flow
 
-## Endpoint
+## Türkçe
 
+### Endpoint
 `POST /api/v1/transfers`
 
-Requirements:
-
-- valid JWT access token;
-- valid server-side session identified by JWT `sid`;
-- mandatory `Idempotency-Key` header;
-- source wallet owned by JWT `sub` customer;
+Gereksinimler:
+- valid JWT;
+- JWT `sid` ile eşleşen active durable session;
+- `Idempotency-Key`;
+- JWT `sub` customer'a ait source wallet;
 - distinct destination wallet;
-- positive `DECIMAL(19,4)` compatible amount.
-
-Request:
+- positive `DECIMAL(19,4)` uyumlu amount;
+- source/destination currency eşitliği;
+- final fraud `Allow`;
+- yeterli source balance.
 
 ```json
 {
@@ -22,125 +23,184 @@ Request:
   "amount": 125.50
 }
 ```
+Currency client'tan trusted alınmaz; wallet state'ten türetilir.
 
-Currency is never trusted from the client. It is derived from the source wallet and must match the destination wallet.
-
-## Idempotency order
-
-A completed idempotency replay is checked **before fraud evaluation**.
-
+### Idempotency sırası
+Completed replay fraud'dan **önce** kontrol edilir:
 ```text
 request
 -> completed replay lookup
-   -> if completed + same immutable transfer payload: return original result
-   -> if same key + different payload: conflict
--> server-side risk signal read
+   -> same key + same immutable payload: original result
+   -> same key + different payload: conflict
+-> durable session/risk
 -> internal fraud
--> external fraud when needed
--> atomic MSSQL posting
+-> external fraud
+-> atomic posting
 ```
 
-This ordering matters. A request completed yesterday must not be re-evaluated against today's changed fraud signals when the client merely retries the same idempotency key.
+Bu precheck semantic/performance guard'dır. Final correctness yine atomic posting store'un Serializable idempotency locking'ine aittir.
 
-The atomic posting store still performs its own Serializable idempotency locking. The precheck is only an optimization/semantic guard; it is not the financial correctness mechanism.
+### Session validation
+Valid JWT tek başına para hareketi için yeterli değildir. `sid`:
+- aynı customer'a ait olmalı;
+- revoked olmamalı;
+- expired olmamalı;
+- Active customer session olmalıdır.
 
-## Server-side session validation
+### Server-derived fraud signals
+Client risk flag göndermez. `SqlWalletTransferRiskSignalStore` server state'ten:
+- customer country;
+- wallet currency;
+- device reference/history;
+- new-device;
+- 5-minute transfer velocity;
+- 24-hour same-currency amount;
+- known-beneficiary
+üretir.
 
-A valid JWT signature is not sufficient for a money-changing endpoint.
+Raw DeviceId provider'a gönderilmez; stable SHA-256 reference kullanılır.
 
-The risk read verifies that JWT `sid` still maps to a CustomerSession that:
-
-- belongs to JWT `sub` customer;
-- is not revoked;
-- has not expired;
-- belongs to an Active customer.
-
-A revoked server-side session therefore cannot continue moving money merely because its short-lived JWT has not expired yet.
-
-## Server-derived fraud signals
-
-The client cannot supply trust/risk flags.
-
-`SqlWalletTransferRiskSignalStore` derives:
-
-- customer country from `Customers`;
-- transfer currency from Wallets;
-- device identity from current server-side session;
-- first-seen time for the same customer/device from session history;
-- new-device flag using a fixed 24-hour window;
-- successful WalletTransfer count over the previous five minutes;
-- successful same-currency transfer amount over the previous 24 hours;
-- known-beneficiary flag based on prior successful transfers to the destination wallet.
-
-Raw DeviceId is not sent to FakeFraud. A stable SHA-256 device reference is sent instead.
-
-Risk reads are intentionally outside the financial posting transaction. They are preflight signals, not financial truth. The posting store re-locks and re-validates wallet ownership, status, currency and balance immediately before money movement.
-
-## Fraud decision flow
-
-Internal fraud uses `InternalFraudEngine` and currency-aware rules.
-
-If internal decision is `Deny`, the flow stops immediately because external `Allow` can never override internal `Deny`.
-
-For internal `Allow` or `Review`, FakeFraud is required. External-provider timeout/network/malformed response is handled fail-closed: no financial posting starts.
-
-Combined decision:
+### Fraud flow
+Internal `Deny` external `Allow` ile override edilemez. Internal `Allow/Review` sonrası FakeFraud gerekir. External timeout/network/malformed response fail-closed'dur.
 
 ```text
-Internal + External
-        |
-        v
-FraudDecisionPolicy
-        |
- Allow / Review / Deny
+Internal + External -> FraudDecisionPolicy -> Allow / Review / Deny
 ```
-
-Behavior:
-
-- Allow -> atomic posting starts;
-- Review -> no money movement; HTTP layer returns review-required status;
+- Allow -> posting;
+- Review -> no money movement;
 - Deny -> no money movement;
-- external fraud unavailable -> no money movement.
+- provider unavailable -> no money movement.
 
-Manual review persistence/queue is not implemented yet. Until FraudEvents/review workflow exists, Review does not create a financial transaction or alter wallet balances.
+Durable manual-review queue henüz yoktur.
 
-## Atomic posting
-
-Only after fraud returns final `Allow` does `SqlWalletTransferPostingStore` begin the financial transaction.
-
-It commits as one MSSQL unit:
-
-- durable idempotency;
-- source wallet debit;
-- destination wallet credit;
+### Atomic posting
+Final Allow sonrası tek MSSQL transaction:
+- IdempotencyRecord;
+- source debit;
+- destination credit;
 - FinancialTransaction;
-- source/destination Wallet Liability ledger accounts;
+- Wallet Liability LedgerAccounts;
 - balanced LedgerJournal + LedgerEntries;
-- persisted SQL Debit/Credit equality check.
+- persisted SQL Debit/Credit equality.
 
-No external HTTP call runs inside this SQL transaction.
+External HTTP bu transaction içinde çalışmaz.
 
-## Double-entry accounting
-
-Wallet-to-wallet transfer is a liability reclassification:
-
+### Double-entry
 ```text
 Debit   source wallet liability       amount
 Credit  destination wallet liability  amount
 ```
+Domain ve SQL seviyesinde journal balance kontrol edilir.
 
-The journal is validated by Domain before persistence and by SQL aggregate after persistence, before COMMIT.
-
-## Replay response
-
-Completed transfer response contains immutable fields only:
-
+### Replay response
+Replay yalnız immutable alanları döndürür:
 - FinancialTransaction ID;
-- source wallet ID;
-- destination wallet ID;
-- amount;
-- currency;
+- source/destination wallet IDs;
+- amount/currency;
 - original completion time;
 - replay flag.
 
-Current wallet balances are deliberately excluded because they may have changed after the original transfer and would break deterministic replay semantics.
+Current wallet balance replay body'ye konmaz; daha sonra değişmiş olabilir.
+
+---
+
+## English
+
+### Endpoint
+`POST /api/v1/transfers`
+
+Requirements:
+- valid JWT;
+- active durable session matching JWT `sid`;
+- `Idempotency-Key`;
+- source wallet owned by JWT `sub` customer;
+- distinct destination wallet;
+- positive `DECIMAL(19,4)`-compatible amount;
+- matching source/destination currency;
+- final fraud `Allow`;
+- sufficient source balance.
+
+```json
+{
+  "sourceWalletId": "11111111-1111-1111-1111-111111111111",
+  "destinationWalletId": "22222222-2222-2222-2222-222222222222",
+  "amount": 125.50
+}
+```
+Currency is not trusted from the client; it is derived from wallet state.
+
+### Idempotency order
+Completed replay is checked **before** fraud:
+```text
+request
+-> completed replay lookup
+   -> same key + same immutable payload: original result
+   -> same key + different payload: conflict
+-> durable session/risk
+-> internal fraud
+-> external fraud
+-> atomic posting
+```
+
+This precheck is a semantic/performance guard. Final correctness still belongs to Serializable idempotency locking inside the atomic posting store.
+
+### Session validation
+A valid JWT alone is not sufficient for money movement. `sid` must:
+- belong to the same customer;
+- not be revoked;
+- not be expired;
+- belong to an Active customer session.
+
+### Server-derived fraud signals
+The client does not submit risk flags. `SqlWalletTransferRiskSignalStore` derives from server state:
+- customer country;
+- wallet currency;
+- device reference/history;
+- new-device flag;
+- five-minute transfer velocity;
+- 24-hour same-currency amount;
+- known beneficiary.
+
+Raw DeviceId is not sent to the provider; a stable SHA-256 reference is used.
+
+### Fraud flow
+Internal `Deny` cannot be overridden by external `Allow`. FakeFraud is required after internal `Allow/Review`. External timeout/network/malformed response fails closed.
+
+```text
+Internal + External -> FraudDecisionPolicy -> Allow / Review / Deny
+```
+- Allow -> posting;
+- Review -> no money movement;
+- Deny -> no money movement;
+- provider unavailable -> no money movement.
+
+A durable manual-review queue is not yet implemented.
+
+### Atomic posting
+After final Allow, one MSSQL transaction commits:
+- IdempotencyRecord;
+- source debit;
+- destination credit;
+- FinancialTransaction;
+- Wallet Liability LedgerAccounts;
+- balanced LedgerJournal + LedgerEntries;
+- persisted SQL Debit/Credit equality validation.
+
+External HTTP never runs inside this transaction.
+
+### Double-entry
+```text
+Debit   source wallet liability       amount
+Credit  destination wallet liability  amount
+```
+Journal balance is validated at both Domain and SQL levels.
+
+### Replay response
+Replay contains only immutable fields:
+- FinancialTransaction ID;
+- source/destination wallet IDs;
+- amount/currency;
+- original completion time;
+- replay flag.
+
+Current wallet balances are excluded because they may have changed since the original transaction.
