@@ -19,7 +19,8 @@ Persistence uses explicit parameterized `Microsoft.Data.SqlClient` commands rath
 - one Wallet per `(CustomerId, Currency)`;
 - non-negative available/blocked balances;
 - ownership FK to Customer;
-- `RowVersion` available for later balance-concurrency workflows.
+- wallet lifecycle is durable;
+- balances use `DECIMAL(19,4)`.
 
 ### BankAccount invariants
 
@@ -60,15 +61,18 @@ Stable lifecycle values:
 3. Failed
 4. Reversed
 
-Audit timestamps are intentionally separated:
+Audit timestamps are separated: `CreatedAt`, original `FinalizedAt`, and later optional `ReversedAt`. Reversal never overwrites the original finalization timestamp.
 
-- `CreatedAt` — transaction creation;
-- `FinalizedAt` — original Completed/Failed finalization;
-- `ReversedAt` — later reversal time, if any.
+For WalletTransfer, the database requires non-null, distinct source/destination wallets. Source ownership/currency and destination currency are enforced with composite foreign keys.
 
-Reversal does not overwrite the original finalization timestamp.
+### Financial decimal rule
 
-For WalletTransfer, the database requires non-null, distinct source/destination wallets. Source wallet ownership/currency is enforced with a composite FK; destination currency is enforced with `(DestinationWalletId, Currency)` FK.
+`FinancialAmountRules` centralizes the `DECIMAL(19,4)` contract:
+
+- at most four decimal places;
+- maximum absolute amount `999999999999999.9999`.
+
+Transfer request amount and post-transfer balances are validated before SQL parameter execution so financial overflow/scale errors are not delegated to the database provider.
 
 ### IdempotencyRecords
 
@@ -78,63 +82,88 @@ Durable financial idempotency is keyed by:
 Scope + CustomerId + IdempotencyKey
 ```
 
-The row also contains a canonical SHA-256 request fingerprint. Same key + different fingerprint will be treated as a conflict by the transfer engine.
+Wallet-transfer scope is `WALLET_TRANSFER`.
 
-Status values are Processing/Completed/Failed. A Processing record may already contain the in-flight FinancialTransaction `ResourceId`; this lets concurrent duplicate requests identify the same operation before it becomes final. `ResultCode` remains null until final state.
+The request fingerprint is SHA-256 over canonical:
 
-Redis may later accelerate short-lived duplicate detection, but MSSQL remains the final idempotency authority.
+```text
+sourceWalletId:N | destinationWalletId:N | amount:G29
+```
+
+Consequences:
+
+- same key + same canonical request waits for/replays the same financial result;
+- same key + different canonical request is an explicit conflict;
+- the database, not Redis, is final authority;
+- replay response uses immutable FinancialTransaction fields, not current wallet balances that may have changed after the original transfer.
+
+The posting store runs at Serializable isolation and looks up the unique idempotency row using `UPDLOCK, HOLDLOCK`. The missing-key range is therefore protected while the first request claims it. A concurrent duplicate waits and then observes the committed Completed record instead of applying money twice.
+
+A Processing row may contain the in-flight FinancialTransaction `ResourceId`. Synchronous wallet-transfer posting normally commits Processing -> Completed in the same SQL transaction; therefore a crash before COMMIT rolls the claim back with the financial state.
 
 ### LedgerAccounts
 
-Ledger accounts are economic accounting accounts, not Wallet rows. Examples:
-
-- wallet liability account;
-- bank settlement asset;
-- merchant payable liability;
-- platform revenue;
-- platform expense.
-
-`Code` is globally unique and bounded to 128 characters. `SqlLedgerAccountStore` provides concurrency-safe get-or-create semantics and verifies that an existing code has the expected currency/accounting type.
-
-Creating a structural ledger account does not move money and may occur before the financial posting transaction. Posting journals cannot occur through this store.
-
-### LedgerJournals and LedgerEntries
-
-Each FinancialTransaction can have one journal. Reversal transactions use their own journal and `ReversesJournalId` points to the original journal; a journal can be reversed at most once.
-
-Ledger entry currency is enforced twice with composite foreign keys:
+Wallet transfer uses stable ledger-account codes:
 
 ```text
-LedgerEntries(JournalId, Currency)
-    -> LedgerJournals(Id, Currency)
-
-LedgerEntries(AccountId, Currency)
-    -> LedgerAccounts(Id, Currency)
+WALLET-LIABILITY:{walletId:N}
 ```
 
-An entry therefore cannot silently use a currency different from its journal or ledger account.
+These are Liability accounts in the Wallet currency. The atomic transfer store finds/creates them inside the same SQL transaction used for posting and verifies existing code/currency/type/status consistency.
 
-Positive amount, Debit/Credit side and sequence constraints are enforced by MSSQL.
+### Wallet transfer accounting
 
-### Debit = Credit commit rule
-
-Debit/credit equality is a cross-row invariant and cannot be expressed safely as a normal CHECK constraint. The upcoming financial posting store must use one SQL transaction:
+A transfer changes two customer-liability accounts:
 
 ```text
-lock/load wallets
--> validate balances/currency
--> insert/update FinancialTransaction
--> insert LedgerJournal
--> insert LedgerEntries
--> SQL SUM(Debit) / SUM(Credit) verification
--> update Wallet balances
--> finalize IdempotencyRecord
+Debit   source wallet liability       amount
+Credit  destination wallet liability  amount
+```
+
+Source liability decreases while destination liability increases. The journal contains no balancing plug/system account because this is a pure internal liability reclassification.
+
+### Atomic WalletTransfer posting
+
+`SqlWalletTransferPostingStore` owns the full synchronous posting transaction. It deliberately replaces the unsafe idea of independently committing a journal repository.
+
+Sequence:
+
+```text
+BEGIN TRANSACTION (SERIALIZABLE)
+-> lock/claim idempotency key range
+-> if Completed + same request: load immutable FinancialTransaction and replay
+-> insert Processing idempotency claim
+-> lock source/destination Wallet rows in deterministic GUID order
+-> validate source ownership, wallet status, currency and balance
+-> apply Wallet domain Debit/Credit in memory
+-> validate post-transfer DECIMAL(19,4) capacity
+-> find/create wallet Liability ledger accounts
+-> insert Processing FinancialTransaction
+-> create and Domain.Post balanced LedgerJournal
+-> insert LedgerJournal + LedgerEntries
+-> re-read SQL entry totals and verify Debit == Credit
+-> update both Wallet balances
+-> finalize FinancialTransaction as Completed
+-> finalize IdempotencyRecord as Completed
 -> COMMIT
 ```
 
-If debit and credit totals are not equal, the transaction must roll back before any wallet balance or idempotency result becomes final.
+Any exception before COMMIT causes the SQL transaction to roll back as one unit. There is no state where wallet money moved but ledger/idempotency did not, or vice versa.
 
-A standalone ledger repository that commits journals independently from wallet balance updates is deliberately not provided.
+Wallet rows are locked in deterministic GUID order. This reduces deadlock risk for opposite-direction concurrent transfers such as A->B and B->A.
+
+Destination wallet must currently be Active for WalletTransfer. Source wallet must be Active and owned by the authenticated customer. Source/destination currencies must match.
+
+### Debit = Credit defense in depth
+
+The Domain `LedgerJournal.Post(...)` checks balance before persistence. After entry inserts, the posting store also performs an SQL aggregate check of persisted rows inside the same transaction. COMMIT is forbidden if:
+
+- fewer than two entries exist;
+- total Debit <= 0;
+- total Credit <= 0;
+- total Debit != total Credit.
+
+Composite foreign keys additionally prevent entry currency from differing from its Journal or LedgerAccount.
 
 ## Domain materialization
 
@@ -153,6 +182,8 @@ Infrastructure uses controlled factories rather than reflection where persisted 
 
 Redis stores transient registration OTP challenge state only. It cannot activate a customer or establish financial truth by itself.
 
-## Remaining financial persistence
+## Remaining transfer work
 
-The next persistence slice will implement the atomic WalletTransfer posting store using the 003 schema. Later phases still need Outbox/Inbox, FraudEvents, Merchants, ReconciliationRuns/ReconciliationIssues and AuditEvents.
+The atomic posting store is implemented but no public transfer endpoint is exposed yet. Before exposing it, the Application transfer handler will add server-derived fraud/velocity/device/beneficiary signals and combine internal FraudEngine + external FakeFraud decisions outside the financial SQL transaction.
+
+Later phases still need Outbox/Inbox, FraudEvents, Merchants, ReconciliationRuns/ReconciliationIssues and AuditEvents.

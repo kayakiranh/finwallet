@@ -6,6 +6,7 @@ using FinWallet.Application.Banking;
 using FinWallet.Application.Communication;
 using FinWallet.Application.Fraud;
 using FinWallet.Application.Registration;
+using FinWallet.Application.Transfers;
 using FinWallet.Application.Wallets;
 using FinWallet.Domain.Fraud;
 using FinWallet.Domain.Fraud.Rules;
@@ -65,6 +66,7 @@ builder.Services.AddScoped<ICustomerRegistrationStore, SqlCustomerRegistrationSt
 builder.Services.AddScoped<IAuthenticationStore, SqlAuthenticationStore>();
 builder.Services.AddScoped<IWalletStore, SqlWalletStore>();
 builder.Services.AddScoped<IBankAccountStore, SqlBankAccountStore>();
+builder.Services.AddScoped<IWalletTransferPostingStore, SqlWalletTransferPostingStore>();
 
 builder.Services.AddSingleton(otpSecuritySettings);
 builder.Services.AddSingleton<IConnectionMultiplexer>(
