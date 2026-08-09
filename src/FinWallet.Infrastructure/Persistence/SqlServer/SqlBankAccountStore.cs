@@ -41,7 +41,7 @@ public sealed class SqlBankAccountStore : IBankAccountStore
     }
 
     /// <inheritdoc />
-    public async Task InsertAsync(BankAccount bankAccount, CancellationToken cancellationToken)
+    public async Task<bool> TryInsertAsync(BankAccount bankAccount, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(bankAccount);
 
@@ -59,8 +59,15 @@ public sealed class SqlBankAccountStore : IBankAccountStore
         AddMutableParameters(command, bankAccount);
         command.Parameters.Add("@CreatedAt", SqlDbType.DateTimeOffset).Value = bankAccount.CreatedAt;
 
-        var affectedRows = await command.ExecuteNonQueryAsync(cancellationToken);
-        if (affectedRows != 1) throw new InvalidOperationException("BankAccount insert did not affect exactly one row.");
+        try
+        {
+            var affectedRows = await command.ExecuteNonQueryAsync(cancellationToken);
+            return affectedRows == 1;
+        }
+        catch (SqlException exception) when (exception.Number is 2601 or 2627)
+        {
+            return false;
+        }
     }
 
     /// <inheritdoc />
@@ -96,7 +103,7 @@ public sealed class SqlBankAccountStore : IBankAccountStore
     /// TR: ID veya Wallet ID lookup koşuluyla tek BankAccount satırı yükler ve ortak materialization uygular.
     /// EN: Loads one BankAccount row using either ID or Wallet-ID lookup and applies shared materialization.
     /// </summary>
-    /// <param name="predicate">TR: Sabit, kod içinde tanımlanan WHERE predicate metni. EN: Fixed WHERE predicate text defined in code.</param>
+    /// <param name="predicate">TR: Yalnızca bu class içindeki sabit çağrılardan gelen WHERE predicate metni. EN: WHERE predicate text supplied only by fixed calls inside this class.</param>
     /// <param name="lookupId">TR: BankAccount veya Wallet lookup kimliği. EN: BankAccount or Wallet lookup identifier.</param>
     /// <param name="customerId">TR: Owner customer kimliği. EN: Owner-customer identifier.</param>
     /// <param name="cancellationToken">TR: SQL sorgu iptal sinyali. EN: SQL-query cancellation signal.</param>
