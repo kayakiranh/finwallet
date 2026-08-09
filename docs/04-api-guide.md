@@ -31,7 +31,7 @@ JWT challenge and forbidden responses also use `ServiceResult<object>`:
 
 ### Idempotency
 
-Money-changing endpoints require `Idempotency-Key`. Registration/login do not use financial idempotency. External-provider idempotency keys are separate from request correlation IDs.
+Money-changing endpoints require `Idempotency-Key`. Wallet creation is not a money movement; its idempotency is provided by the customer/currency uniqueness invariant. External-provider idempotency keys are separate from request correlation IDs.
 
 ### Error handling
 
@@ -47,17 +47,7 @@ All HTTP services expose controller-based liveness endpoints and return `Service
 
 ### POST `/api/v1/auth/register`
 
-Creates a durable pending customer registration and sends a verification OTP through FakeCommunication.
-
-Successful response: HTTP `202 Accepted` with `ServiceResult<RegisterCustomerResponse>`.
-
-Rules:
-
-- registration country is allow-listed;
-- phone/country combination is normalized and validated;
-- password is persisted only as PBKDF2 hash material;
-- Customer + CustomerCredential are committed atomically;
-- OTP/provider work happens after SQL commit.
+Creates a durable pending customer registration and sends a verification OTP through FakeCommunication. Success returns HTTP `202 Accepted` with `ServiceResult<RegisterCustomerResponse>`.
 
 ### POST `/api/v1/auth/registration/verify`
 
@@ -67,8 +57,6 @@ Verifies/consumes registration OTP and activates an eligible pending customer. S
 
 Authenticates an active customer and creates a device-bound server-side session. Success returns HTTP 200 with `ServiceResult<AuthenticationTokensResponse>`.
 
-Rules include generic invalid-credential responses, temporary lockout, short-lived JWT access tokens and atomically persisted session + initial refresh-token hash.
-
 ### POST `/api/v1/auth/refresh`
 
 Rotates a single-use refresh token. Concurrent rotation uses MSSQL compare-and-set semantics; reuse detection revokes the related session/token family.
@@ -76,6 +64,49 @@ Rotates a single-use refresh token. Concurrent rotation uses MSSQL compare-and-s
 ### POST `/api/v1/auth/logout`
 
 Not implemented yet.
+
+## Wallet endpoints
+
+Wallet endpoints require a valid access token and derive ownership exclusively from the validated JWT `sub` customer identifier.
+
+### POST `/api/v1/wallets`
+
+Creates a zero-balance wallet for one supported currency.
+
+Request:
+
+```json
+{
+  "currency": "TRY"
+}
+```
+
+Supported values are `TRY`, `USD` and `EUR`.
+
+Behavior:
+
+- first create for a customer/currency returns HTTP 201 / `WALLET_CREATED`;
+- repeated create for the same customer/currency returns HTTP 200 / `WALLET_EXISTS` with the same durable wallet;
+- concurrent create requests converge on the database winner through `UNIQUE(CustomerId, Currency)` + `TryInsertAsync` + reload;
+- new wallets start with available and blocked balance equal to zero;
+- wallet creation does not accept an initial balance and therefore cannot mint money.
+
+Example success data:
+
+```json
+{
+  "walletId": "f98c4910-44c4-42fb-9ff1-c2cd9c0f73bd",
+  "currency": "TRY",
+  "availableBalance": 0,
+  "blockedBalance": 0,
+  "status": "Active",
+  "createdAt": "2026-08-09T15:00:00Z"
+}
+```
+
+### GET `/api/v1/wallets`
+
+Returns all wallets owned by the authenticated customer ordered by currency. An empty customer wallet set returns HTTP 200 with an empty collection and code `WALLETS_RETRIEVED`.
 
 ## Bank account endpoints
 
@@ -91,26 +122,7 @@ Request:
 }
 ```
 
-Pending response: HTTP `202 Accepted` with `ServiceResult<BankAccountResponse>`.
-
-```json
-{
-  "isSuccess": true,
-  "code": "BANK_ACCOUNT_PENDING",
-  "message": "Bank account opening is pending at the external provider.",
-  "data": {
-    "bankAccountId": "878a328e-c563-4772-a62f-afad3e4c8a5f",
-    "walletId": "f98c4910-44c4-42fb-9ff1-c2cd9c0f73bd",
-    "currency": "TRY",
-    "externalAccountId": "89c1f38e-ce7e-4234-9743-eebbd67f69a2",
-    "externalIban": "FWTRY...",
-    "status": "Opening"
-  },
-  "errors": []
-}
-```
-
-When the provider account is already final/active, HTTP 200 is returned with code `BANK_ACCOUNT_READY`.
+Pending response: HTTP `202 Accepted` with `ServiceResult<BankAccountResponse>`. When the provider account is already final/active, HTTP 200 is returned with code `BANK_ACCOUNT_READY`.
 
 Processing sequence:
 
@@ -118,7 +130,7 @@ Processing sequence:
 JWT customer
   -> owned Wallet lookup
   -> find/create durable BankAccount(Opening)
-  -> SQL commit
+  -> SQL operation completes
   -> FakeBank HTTP call
   -> validate provider identity/currency
   -> apply provider state
@@ -127,24 +139,23 @@ JWT customer
 
 Important rules:
 
-- wallet lookup includes authenticated customer ownership; another customer's wallet is indistinguishable from a missing wallet;
+- another customer's wallet is indistinguishable from a missing wallet;
 - one internal BankAccount may exist per Wallet;
 - internal BankAccount ID and provider Account ID are always separate;
-- the provider request key is deterministically derived from the durable internal BankAccount ID;
-- if the provider creates an account but the HTTP response is lost, a retry uses the same provider request key and cannot create a second external account;
+- provider request key is deterministically derived from the durable internal BankAccount ID;
+- a lost provider HTTP response can be retried without creating a duplicate external account;
 - no external HTTP call runs inside an open FinWallet SQL transaction;
-- pending openings are polled through the provider's read-only account lookup;
-- stale provider results cannot overwrite newer BankAccount state because MSSQL update uses both expected status and expected `UpdatedAt` snapshot;
-- provider currency/account identity changes are treated as upstream contract failures;
-- provider IBAN-like data may be returned to the authenticated account owner but must be masked in logs.
+- pending openings use provider read-only polling;
+- stale results cannot overwrite newer BankAccount state because MSSQL update uses expected status + expected `UpdatedAt`;
+- provider IBAN-like data may be returned to the authenticated owner but must be masked in logs.
 
 Failure mapping:
 
-- 401 `UNAUTHORIZED` / `INVALID_ACCESS_TOKEN` — authentication subject is missing or invalid;
-- 404 `WALLET_NOT_FOUND` — wallet absent or not owned by authenticated customer;
-- 409 `BANK_ACCOUNT_CONFLICT` — concurrent internal state change;
-- 503 provider code — retryable timeout/network/provider failure;
-- 502 provider code — non-retryable upstream contract/state inconsistency.
+- 401 `UNAUTHORIZED` / `INVALID_ACCESS_TOKEN`;
+- 404 `WALLET_NOT_FOUND`;
+- 409 `BANK_ACCOUNT_CONFLICT`;
+- 503 retryable provider failure;
+- 502 non-retryable provider contract/state inconsistency.
 
 ## Financial endpoint conventions
 
