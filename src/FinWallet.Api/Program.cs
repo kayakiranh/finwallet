@@ -4,6 +4,8 @@ using FinWallet.Application.Authentication;
 using FinWallet.Application.Communication;
 using FinWallet.Application.Fraud;
 using FinWallet.Application.Registration;
+using FinWallet.Domain.Fraud;
+using FinWallet.Domain.Fraud.Rules;
 using FinWallet.Domain.Registration;
 using FinWallet.Infrastructure.Authentication;
 using FinWallet.Infrastructure.Communication;
@@ -64,6 +66,13 @@ builder.Services.AddSingleton<IPasswordHasher, Pbkdf2PasswordHasher>();
 builder.Services.AddSingleton<IRefreshTokenGenerator, SecureRefreshTokenGenerator>();
 builder.Services.AddSingleton(jwtSettings);
 builder.Services.AddSingleton<IAccessTokenIssuer, JwtAccessTokenIssuer>();
+
+builder.Services.AddSingleton<IInternalFraudRule, TransactionAmountFraudRule>();
+builder.Services.AddSingleton<IInternalFraudRule, DailyAmountFraudRule>();
+builder.Services.AddSingleton<IInternalFraudRule, VelocityFraudRule>();
+builder.Services.AddSingleton<IInternalFraudRule, NewDeviceBeneficiaryFraudRule>();
+builder.Services.AddSingleton<InternalFraudEngine>();
+builder.Services.AddSingleton<FraudDecisionPolicy>();
 
 builder.Services.AddScoped<RegisterCustomerHandler>();
 builder.Services.AddScoped<VerifyRegistrationOtpHandler>();
