@@ -53,8 +53,8 @@ public sealed class RefreshSessionHandler
     }
 
     /// <summary>
-    /// TR: Sunulan refresh token'ı hash ile lookup eder, reuse tespitinde session'ı revoke eder, geçerli token'ı consume edip replacement token ile atomik rotate eder ve yeni access token döndürür.
-    /// EN: Looks up the submitted refresh token by hash, revokes the session on reuse detection, atomically consumes and rotates a valid token to a replacement, and returns a new access token.
+    /// TR: Sunulan refresh token'ı hash ile lookup eder, reuse tespitinde session'ı revoke eder, geçerli token'ı DB compare-and-set benzeri koşullu işlemle replacement token'a rotate eder ve yalnızca başarılı rotation sonrasında yeni token çiftini döndürür.
+    /// EN: Looks up the submitted refresh token by hash, revokes the session on reuse detection, rotates a valid token to a replacement through a database compare-and-set-like conditional operation and returns a new token pair only after successful rotation.
     /// </summary>
     /// <param name="command">
     /// TR: Ham refresh token değerini taşıyan refresh komutu.
@@ -73,8 +73,8 @@ public sealed class RefreshSessionHandler
     /// EN: Thrown when the token is unknown, invalid, expired, revoked or the session/customer is not eligible for refresh.
     /// </exception>
     /// <exception cref="RefreshTokenReuseDetectedException">
-    /// TR: Daha önce consume edilmiş token tekrar kullanılırsa ve session güvenlik amacıyla revoke edilirse oluşur.
-    /// EN: Thrown when a previously consumed token is reused and the session is revoked for security.
+    /// TR: Daha önce consume edilmiş token tekrar kullanılırsa veya aynı token ile eş zamanlı ikinci rotation isteği yarışmayı kaybederse session revoke edilerek oluşur.
+    /// EN: Thrown with session revocation when a previously consumed token is reused or when a concurrent second rotation using the same token loses the atomic race.
     /// </exception>
     public async Task<AuthenticationTokensResult> HandleAsync(
         RefreshSessionCommand command,
@@ -94,8 +94,7 @@ public sealed class RefreshSessionHandler
 
         if (refreshData.RefreshToken.IndicatesReuse())
         {
-            await _authenticationStore.RevokeSessionAsync(refreshData.Session.Id, now, cancellationToken);
-            throw new RefreshTokenReuseDetectedException();
+            await RevokeForReuseAsync(refreshData.Session.Id, now, cancellationToken);
         }
 
         if (refreshData.Customer.Status != CustomerStatus.Active
@@ -123,16 +122,21 @@ public sealed class RefreshSessionHandler
         refreshData.RefreshToken.Consume(now, replacementTokenId);
         refreshData.Session.Touch(now);
 
-        var accessToken = _accessTokenIssuer.Issue(
-            refreshData.Customer.Id,
-            refreshData.Session.Id,
-            now);
-
-        await _authenticationStore.RotateRefreshTokenAsync(
+        var rotated = await _authenticationStore.TryRotateRefreshTokenAsync(
             refreshData.Session,
             refreshData.RefreshToken,
             replacementToken,
             cancellationToken);
+
+        if (!rotated)
+        {
+            await RevokeForReuseAsync(refreshData.Session.Id, now, cancellationToken);
+        }
+
+        var accessToken = _accessTokenIssuer.Issue(
+            refreshData.Customer.Id,
+            refreshData.Session.Id,
+            now);
 
         return new AuthenticationTokensResult(
             refreshData.Customer.Id,
@@ -141,6 +145,35 @@ public sealed class RefreshSessionHandler
             accessToken.ExpiresAt,
             replacementMaterial.RawToken,
             replacementExpiresAt);
+    }
+
+    /// <summary>
+    /// TR: Refresh-token replay/reuse tespitinde session token ailesini revoke eder ve güvenlik hatasını üretir.
+    /// EN: Revokes the session token family after refresh-token replay/reuse detection and raises the security error.
+    /// </summary>
+    /// <param name="sessionId">
+    /// TR: Token ailesi revoke edilecek session kimliği.
+    /// EN: Session identifier whose token family is revoked.
+    /// </param>
+    /// <param name="detectedAt">
+    /// TR: Reuse/replay olayının tespit edildiği UTC zaman bilgisi.
+    /// EN: UTC timestamp at which the reuse/replay event was detected.
+    /// </param>
+    /// <param name="cancellationToken">
+    /// TR: Revoke persistence işleminin iptal sinyali.
+    /// EN: Cancellation signal for the revocation persistence operation.
+    /// </param>
+    /// <exception cref="RefreshTokenReuseDetectedException">
+    /// TR: Session revoke talebi tamamlandıktan sonra her zaman oluşur.
+    /// EN: Always thrown after the session revocation request completes.
+    /// </exception>
+    private async Task RevokeForReuseAsync(
+        Guid sessionId,
+        DateTimeOffset detectedAt,
+        CancellationToken cancellationToken)
+    {
+        await _authenticationStore.RevokeSessionAsync(sessionId, detectedAt, cancellationToken);
+        throw new RefreshTokenReuseDetectedException();
     }
 
     /// <summary>
