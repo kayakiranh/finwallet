@@ -1,6 +1,7 @@
 using System.Text;
 using FinWallet.Api.Endpoints;
 using FinWallet.Api.Errors;
+using FinWallet.Api.Middleware;
 using FinWallet.Application.Authentication;
 using FinWallet.Application.Communication;
 using FinWallet.Application.Registration;
@@ -101,6 +102,7 @@ builder.Services.AddAuthorization();
 
 var app = builder.Build();
 
+app.UseMiddleware<CorrelationIdMiddleware>();
 app.UseExceptionHandler();
 app.UseAuthentication();
 app.UseAuthorization();
