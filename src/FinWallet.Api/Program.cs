@@ -88,6 +88,8 @@ builder.Services.AddScoped<RegisterCustomerHandler>();
 builder.Services.AddScoped<VerifyRegistrationOtpHandler>();
 builder.Services.AddScoped<LoginCustomerHandler>();
 builder.Services.AddScoped<RefreshSessionHandler>();
+builder.Services.AddScoped<CreateWalletHandler>();
+builder.Services.AddScoped<ListWalletsHandler>();
 builder.Services.AddScoped<OpenBankAccountHandler>();
 
 builder.Services.AddHttpClient<ICommunicationGateway, FakeCommunicationGateway>(client =>
