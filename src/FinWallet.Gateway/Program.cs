@@ -5,21 +5,24 @@ using FinWallet.Shared.Web;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.IdentityModel.Tokens;
+using Yarp.ReverseProxy.Transforms;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.AddFinWalletWebPlatform("FinWallet.Gateway");
 builder.Services.AddControllers();
 
-var jwtIssuer = builder.Configuration["FinWallet:Security:Jwt:Issuer"];
-var jwtAudience = builder.Configuration["FinWallet:Security:Jwt:Audience"];
-var jwtSigningKey = builder.Configuration["FinWallet:Security:Jwt:SigningKey"];
-ArgumentException.ThrowIfNullOrWhiteSpace(jwtIssuer);
-ArgumentException.ThrowIfNullOrWhiteSpace(jwtAudience);
-ArgumentException.ThrowIfNullOrWhiteSpace(jwtSigningKey);
+var jwtIssuer = GetRequired(builder.Configuration, "FinWallet:Security:Jwt:Issuer");
+var jwtAudience = GetRequired(builder.Configuration, "FinWallet:Security:Jwt:Audience");
+var jwtSigningKey = GetRequired(builder.Configuration, "FinWallet:Security:Jwt:SigningKey");
+var downstreamServiceKey = GetRequired(builder.Configuration, "Gateway:Security:DownstreamServiceKey");
 if (Encoding.UTF8.GetByteCount(jwtSigningKey) < 32)
 {
     throw new InvalidOperationException("JWT signing key must contain at least 32 UTF-8 bytes.");
+}
+if (Encoding.UTF8.GetByteCount(downstreamServiceKey) < 32)
+{
+    throw new InvalidOperationException("Gateway downstream service key must contain at least 32 UTF-8 bytes.");
 }
 
 builder.Services
@@ -39,7 +42,7 @@ builder.Services
             RequireExpirationTime = true,
             RequireSignedTokens = true,
             ValidAlgorithms = new[] { SecurityAlgorithms.HmacSha256 },
-            ClockSkew = TimeSpan.FromSeconds(builder.Configuration.GetValue("Gateway:Security:JwtClockSkewSeconds", 30))
+            ClockSkew = TimeSpan.FromSeconds(ReadBoundedInt(builder.Configuration, "Gateway:Security:JwtClockSkewSeconds", 30, 0, 120))
         };
         options.Events = new JwtBearerEvents
         {
@@ -70,7 +73,11 @@ builder.Services.AddSingleton<IAuthorizationHandler, InternalServiceKeyAuthoriza
 
 builder.Services
     .AddReverseProxy()
-    .LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"));
+    .LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"))
+    .AddTransforms(transformBuilderContext =>
+    {
+        transformBuilderContext.AddRequestHeader("X-Internal-Service-Key", downstreamServiceKey, append: false);
+    });
 
 var app = builder.Build();
 
@@ -82,3 +89,21 @@ app.MapControllers();
 app.MapReverseProxy();
 
 app.Run();
+
+static string GetRequired(IConfiguration configuration, string key)
+{
+    var value = configuration[key];
+    ArgumentException.ThrowIfNullOrWhiteSpace(value, key);
+    return value;
+}
+
+static int ReadBoundedInt(IConfiguration configuration, string key, int defaultValue, int min, int max)
+{
+    var value = configuration.GetValue<int?>(key) ?? defaultValue;
+    if (value < min || value > max)
+    {
+        throw new InvalidOperationException($"Configuration '{key}' must be between {min} and {max}.");
+    }
+
+    return value;
+}
