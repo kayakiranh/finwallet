@@ -83,9 +83,9 @@ public sealed class ExecuteWalletTransferHandler
             signals.TransactionCountLastFiveMinutes,
             signals.IsNewDevice,
             signals.IsKnownBeneficiary);
-        var internalDecision = _internalFraudEngine.Evaluate(internalContext);
+        var internalResult = _internalFraudEngine.Evaluate(internalContext);
 
-        if (internalDecision == FraudDecision.Deny)
+        if (internalResult.Decision == FraudDecision.Deny)
         {
             throw new WalletTransferFraudDeniedException();
         }
@@ -122,7 +122,7 @@ public sealed class ExecuteWalletTransferHandler
             throw new WalletTransferFraudUnavailableException(exception);
         }
 
-        var finalDecision = _fraudDecisionPolicy.Combine(internalDecision, externalResult.Decision);
+        var finalDecision = _fraudDecisionPolicy.Combine(internalResult.Decision, externalResult.Decision);
         switch (finalDecision)
         {
             case FraudDecision.Deny:

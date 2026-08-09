@@ -88,6 +88,9 @@ public sealed class TransfersController : ControllerBase
     /// <returns>TR: Her iki claim geçerli N-format GUID ise true döndürür. EN: Returns true when both claims are valid N-format GUIDs.</returns>
     private bool TryGetAuthenticatedIdentity(out Guid customerId, out Guid sessionId)
     {
+        customerId = Guid.Empty;
+        sessionId = Guid.Empty;
+
         var subject = User.FindFirst("sub")?.Value;
         var session = User.FindFirst("sid")?.Value;
         return Guid.TryParseExact(subject, "N", out customerId) &&
