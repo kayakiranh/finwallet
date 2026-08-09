@@ -18,11 +18,13 @@ public sealed class LedgerAccount
         ArgumentException.ThrowIfNullOrWhiteSpace(currency);
         if (!Enum.IsDefined(type)) throw new ArgumentOutOfRangeException(nameof(type));
 
+        var normalizedCode = code.Trim().ToUpperInvariant();
+        if (normalizedCode.Length > 128) throw new ArgumentOutOfRangeException(nameof(code), "Ledger-account code cannot exceed 128 characters.");
         var normalizedCurrency = currency.Trim().ToUpperInvariant();
         if (normalizedCurrency.Length != 3) throw new ArgumentException("Ledger currency must contain exactly three characters.", nameof(currency));
 
         Id = id;
-        Code = code.Trim().ToUpperInvariant();
+        Code = normalizedCode;
         Currency = normalizedCurrency;
         Type = type;
         Status = LedgerAccountStatus.Active;
