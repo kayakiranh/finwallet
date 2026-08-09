@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text;
 using FinWallet.Api.Configuration;
 using FinWallet.Api.Errors;
@@ -18,43 +19,37 @@ using FinWallet.Infrastructure.Fraud;
 using FinWallet.Infrastructure.Persistence.Redis;
 using FinWallet.Infrastructure.Persistence.SqlServer;
 using FinWallet.Shared.Contracts;
+using FinWallet.Shared.Web;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
-var sqlConnectionString = builder.Configuration["FinWallet:Sql:ConnectionString"];
-ArgumentException.ThrowIfNullOrWhiteSpace(sqlConnectionString);
+builder.AddFinWalletWebPlatform("FinWallet.Api");
 
-var redisConnectionString = builder.Configuration["FinWallet:Redis:ConnectionString"];
-ArgumentException.ThrowIfNullOrWhiteSpace(redisConnectionString);
-
-var registrationOtpPepper = builder.Configuration["FinWallet:Security:RegistrationOtpPepper"];
-ArgumentException.ThrowIfNullOrWhiteSpace(registrationOtpPepper);
-
-var jwtIssuer = builder.Configuration["FinWallet:Security:Jwt:Issuer"];
-ArgumentException.ThrowIfNullOrWhiteSpace(jwtIssuer);
-
-var jwtAudience = builder.Configuration["FinWallet:Security:Jwt:Audience"];
-ArgumentException.ThrowIfNullOrWhiteSpace(jwtAudience);
-
-var jwtSigningKey = builder.Configuration["FinWallet:Security:Jwt:SigningKey"];
-ArgumentException.ThrowIfNullOrWhiteSpace(jwtSigningKey);
+var sqlConnectionString = GetRequired(builder.Configuration, "FinWallet:Sql:ConnectionString");
+var redisConnectionString = GetRequired(builder.Configuration, "FinWallet:Redis:ConnectionString");
+var registrationOtpPepper = GetRequired(builder.Configuration, "FinWallet:Security:RegistrationOtpPepper");
+var jwtIssuer = GetRequired(builder.Configuration, "FinWallet:Security:Jwt:Issuer");
+var jwtAudience = GetRequired(builder.Configuration, "FinWallet:Security:Jwt:Audience");
+var jwtSigningKey = GetRequired(builder.Configuration, "FinWallet:Security:Jwt:SigningKey");
+var jwtLifetimeMinutes = ReadBoundedInt(builder.Configuration, "FinWallet:Security:Jwt:AccessTokenLifetimeMinutes", 10, 2, 30);
+var jwtClockSkewSeconds = ReadBoundedInt(builder.Configuration, "FinWallet:Security:Jwt:ClockSkewSeconds", 30, 0, 120);
 
 var fakeCommunicationBaseUri = IntegrationUriFactory.CreateRequiredBaseUri(
-    builder.Configuration["FinWallet:Integrations:FakeCommunication:BaseUrl"],
+    GetRequired(builder.Configuration, "FinWallet:Integrations:FakeCommunication:BaseUrl"),
     "FinWallet:Integrations:FakeCommunication:BaseUrl");
 var fakeFraudBaseUri = IntegrationUriFactory.CreateRequiredBaseUri(
-    builder.Configuration["FinWallet:Integrations:FakeFraud:BaseUrl"],
+    GetRequired(builder.Configuration, "FinWallet:Integrations:FakeFraud:BaseUrl"),
     "FinWallet:Integrations:FakeFraud:BaseUrl");
 var fakeBankBaseUri = IntegrationUriFactory.CreateRequiredBaseUri(
-    builder.Configuration["FinWallet:Integrations:FakeBank:BaseUrl"],
+    GetRequired(builder.Configuration, "FinWallet:Integrations:FakeBank:BaseUrl"),
     "FinWallet:Integrations:FakeBank:BaseUrl");
 
 var sqlSettings = new SqlServerSettings(sqlConnectionString);
 var otpSecuritySettings = new RegistrationOtpSecuritySettings(registrationOtpPepper);
-var jwtSettings = new JwtTokenSettings(jwtIssuer, jwtAudience, jwtSigningKey);
+var jwtSettings = new JwtTokenSettings(jwtIssuer, jwtAudience, jwtSigningKey, jwtLifetimeMinutes);
 
 builder.Services.AddControllers();
 builder.Services.AddExceptionHandler<ApiExceptionHandler>();
@@ -67,10 +62,21 @@ builder.Services.AddScoped<IAuthenticationStore, SqlAuthenticationStore>();
 builder.Services.AddScoped<IWalletStore, SqlWalletStore>();
 builder.Services.AddScoped<IBankAccountStore, SqlBankAccountStore>();
 builder.Services.AddScoped<IWalletTransferPostingStore, SqlWalletTransferPostingStore>();
+builder.Services.AddScoped<IWalletTransferReplayStore, SqlWalletTransferReplayStore>();
+builder.Services.AddScoped<IWalletTransferRiskSignalStore, SqlWalletTransferRiskSignalStore>();
 
 builder.Services.AddSingleton(otpSecuritySettings);
-builder.Services.AddSingleton<IConnectionMultiplexer>(
-    _ => ConnectionMultiplexer.Connect(redisConnectionString));
+builder.Services.AddSingleton<IConnectionMultiplexer>(_ =>
+{
+    var options = ConfigurationOptions.Parse(redisConnectionString);
+    options.AbortOnConnectFail = builder.Configuration.GetValue("FinWallet:Redis:AbortOnConnectFail", false);
+    options.ConnectRetry = ReadBoundedInt(builder.Configuration, "FinWallet:Redis:ConnectRetry", 3, 0, 20);
+    options.ConnectTimeout = ReadBoundedInt(builder.Configuration, "FinWallet:Redis:ConnectTimeoutMilliseconds", 3000, 250, 60_000);
+    options.SyncTimeout = ReadBoundedInt(builder.Configuration, "FinWallet:Redis:SyncTimeoutMilliseconds", 3000, 250, 60_000);
+    options.KeepAlive = ReadBoundedInt(builder.Configuration, "FinWallet:Redis:KeepAliveSeconds", 60, 10, 600);
+    options.ClientName = "FinWallet.Api";
+    return ConnectionMultiplexer.Connect(options);
+});
 builder.Services.AddSingleton<IRegistrationOtpService, RedisRegistrationOtpService>();
 
 builder.Services.AddSingleton<RegistrationCountryPolicy>();
@@ -93,22 +99,40 @@ builder.Services.AddScoped<RefreshSessionHandler>();
 builder.Services.AddScoped<CreateWalletHandler>();
 builder.Services.AddScoped<ListWalletsHandler>();
 builder.Services.AddScoped<OpenBankAccountHandler>();
+builder.Services.AddScoped<ExecuteWalletTransferHandler>();
 
-builder.Services.AddHttpClient<ICommunicationGateway, FakeCommunicationGateway>(client =>
-{
-    client.BaseAddress = fakeCommunicationBaseUri;
-    client.Timeout = TimeSpan.FromSeconds(3);
-});
-builder.Services.AddHttpClient<IExternalFraudProvider, FakeFraudProvider>(client =>
-{
-    client.BaseAddress = fakeFraudBaseUri;
-    client.Timeout = TimeSpan.FromSeconds(2);
-});
-builder.Services.AddHttpClient<IBankProvider, FakeBankProvider>(client =>
-{
-    client.BaseAddress = fakeBankBaseUri;
-    client.Timeout = TimeSpan.FromSeconds(3);
-});
+builder.Services.AddTransient<InternalServiceHeaderHandler>();
+
+var pooledConnectionLifetimeMinutes = ReadBoundedInt(builder.Configuration, "FinWallet:HttpClient:PooledConnectionLifetimeMinutes", 5, 1, 60);
+var pooledConnectionIdleMinutes = ReadBoundedInt(builder.Configuration, "FinWallet:HttpClient:PooledConnectionIdleMinutes", 2, 1, 30);
+var maxConnectionsPerServer = ReadBoundedInt(builder.Configuration, "FinWallet:HttpClient:MaxConnectionsPerServer", 256, 8, 4096);
+
+builder.Services
+    .AddHttpClient<ICommunicationGateway, FakeCommunicationGateway>(client =>
+    {
+        client.BaseAddress = fakeCommunicationBaseUri;
+        client.Timeout = TimeSpan.FromSeconds(ReadBoundedInt(builder.Configuration, "FinWallet:Integrations:FakeCommunication:TimeoutSeconds", 3, 1, 30));
+    })
+    .ConfigurePrimaryHttpMessageHandler(CreatePrimaryHandler)
+    .AddHttpMessageHandler<InternalServiceHeaderHandler>();
+
+builder.Services
+    .AddHttpClient<IExternalFraudProvider, FakeFraudProvider>(client =>
+    {
+        client.BaseAddress = fakeFraudBaseUri;
+        client.Timeout = TimeSpan.FromSeconds(ReadBoundedInt(builder.Configuration, "FinWallet:Integrations:FakeFraud:TimeoutSeconds", 2, 1, 30));
+    })
+    .ConfigurePrimaryHttpMessageHandler(CreatePrimaryHandler)
+    .AddHttpMessageHandler<InternalServiceHeaderHandler>();
+
+builder.Services
+    .AddHttpClient<IBankProvider, FakeBankProvider>(client =>
+    {
+        client.BaseAddress = fakeBankBaseUri;
+        client.Timeout = TimeSpan.FromSeconds(ReadBoundedInt(builder.Configuration, "FinWallet:Integrations:FakeBank:TimeoutSeconds", 3, 1, 60));
+    })
+    .ConfigurePrimaryHttpMessageHandler(CreatePrimaryHandler)
+    .AddHttpMessageHandler<InternalServiceHeaderHandler>();
 
 builder.Services
     .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
@@ -127,7 +151,7 @@ builder.Services
             RequireExpirationTime = true,
             RequireSignedTokens = true,
             ValidAlgorithms = new[] { SecurityAlgorithms.HmacSha256 },
-            ClockSkew = TimeSpan.FromSeconds(30)
+            ClockSkew = TimeSpan.FromSeconds(jwtClockSkewSeconds)
         };
         options.Events = new JwtBearerEvents
         {
@@ -136,18 +160,14 @@ builder.Services
                 context.HandleResponse();
                 context.Response.StatusCode = StatusCodes.Status401Unauthorized;
                 await context.Response.WriteAsJsonAsync(
-                    ServiceResult<object>.Failure(
-                        "UNAUTHORIZED",
-                        "A valid access token is required."),
+                    ServiceResult<object>.Failure("UNAUTHORIZED", "A valid access token is required."),
                     context.HttpContext.RequestAborted);
             },
             OnForbidden = async context =>
             {
                 context.Response.StatusCode = StatusCodes.Status403Forbidden;
                 await context.Response.WriteAsJsonAsync(
-                    ServiceResult<object>.Failure(
-                        "FORBIDDEN",
-                        "The authenticated customer is not allowed to perform this operation."),
+                    ServiceResult<object>.Failure("FORBIDDEN", "The authenticated customer is not allowed to perform this operation."),
                     context.HttpContext.RequestAborted);
             }
         };
@@ -157,8 +177,39 @@ builder.Services.AddAuthorization();
 var app = builder.Build();
 
 app.UseExceptionHandler();
+app.UseFinWalletWebPlatform();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
 
 app.Run();
+
+SocketsHttpHandler CreatePrimaryHandler()
+{
+    return new SocketsHttpHandler
+    {
+        AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate | DecompressionMethods.Brotli,
+        MaxConnectionsPerServer = maxConnectionsPerServer,
+        PooledConnectionLifetime = TimeSpan.FromMinutes(pooledConnectionLifetimeMinutes),
+        PooledConnectionIdleTimeout = TimeSpan.FromMinutes(pooledConnectionIdleMinutes),
+        UseCookies = false
+    };
+}
+
+static string GetRequired(IConfiguration configuration, string key)
+{
+    var value = configuration[key];
+    ArgumentException.ThrowIfNullOrWhiteSpace(value, key);
+    return value;
+}
+
+static int ReadBoundedInt(IConfiguration configuration, string key, int defaultValue, int min, int max)
+{
+    var value = configuration.GetValue<int?>(key) ?? defaultValue;
+    if (value < min || value > max)
+    {
+        throw new InvalidOperationException($"Configuration '{key}' must be between {min} and {max}.");
+    }
+
+    return value;
+}
