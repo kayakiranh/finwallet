@@ -1,8 +1,8 @@
 namespace FinWallet.Application.Registration;
 
 /// <summary>
-/// TR: Yeni müşteri kayıt akışının ülke, telefon, e-posta ve parola girdilerini Application katmanına taşır.
-/// EN: Carries country, phone, email and password input for a new customer registration flow into the Application layer.
+/// TR: Yeni müşteri kayıt akışının ülke, telefon, e-posta, parola ve request correlation bilgilerini Application katmanına taşır.
+/// EN: Carries country, phone, email, password and request-correlation input for a new customer registration flow into the Application layer.
 /// </summary>
 public sealed class RegisterCustomerCommand
 {
@@ -26,12 +26,22 @@ public sealed class RegisterCustomerCommand
     /// TR: Yalnızca işlem süresince bellekte tutulacak ham müşteri parolası.
     /// EN: Raw customer password retained in memory only for the duration of processing.
     /// </param>
-    public RegisterCustomerCommand(string countryCode, string phoneNumber, string? email, string password)
+    /// <param name="correlationId">
+    /// TR: API katmanının oluşturduğu veya kabul ettiği ve dış SMS çağrısına kadar taşınacak correlation kimliği.
+    /// EN: Correlation identifier created or accepted by the API layer and propagated to the external SMS call.
+    /// </param>
+    public RegisterCustomerCommand(
+        string countryCode,
+        string phoneNumber,
+        string? email,
+        string password,
+        string correlationId)
     {
         CountryCode = countryCode;
         PhoneNumber = phoneNumber;
         Email = email;
         Password = password;
+        CorrelationId = correlationId;
     }
 
     /// <summary>
@@ -57,4 +67,10 @@ public sealed class RegisterCustomerCommand
     /// EN: Gets the raw customer password; it must not be logged or written to persistent storage.
     /// </summary>
     public string Password { get; }
+
+    /// <summary>
+    /// TR: Kayıt request'i ile FakeCommunication çağrısını ilişkilendirmek için kullanılan correlation kimliğini döndürür.
+    /// EN: Gets the correlation identifier used to link the registration request to the FakeCommunication call.
+    /// </summary>
+    public string CorrelationId { get; }
 }
