@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\FinWallet.Application\FinWallet.Application.csproj" />
+    <ProjectReference Include="..\FinWallet.Domain\FinWallet.Domain.csproj" />
+  </ItemGroup>
+</Project>
