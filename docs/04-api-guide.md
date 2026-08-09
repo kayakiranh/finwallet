@@ -1,65 +1,121 @@
 # FinWallet API Guide
 
-## API conventions
+## Public entry point
 
-### Controller-based Web API
+Normal clients call YARP Gateway, not FinWallet.Api directly.
 
-Every FinWallet HTTP service uses ASP.NET Core controller-based Web API. Minimal API endpoint mappings are forbidden. `Program.cs` is limited to composition/bootstrap concerns and registers controllers through `AddControllers()` / `MapControllers()`.
+Local development:
 
-### Base path
+```text
+http://localhost:8080
+```
 
-Main FinWallet business endpoints use `/api/v1`.
+Main business path prefix:
 
-### ServiceResult response envelope
+```text
+/api/v1
+```
 
-Every API response body uses the shared `ServiceResult<T>` contract from `FinWallet.Shared.Contracts`. This includes controller results, central exception responses and JWT authentication/authorization failures.
+Gateway routes anonymous authentication endpoints to FinWallet.Api. Other `/api/*` routes require a valid JWT at the Gateway before proxying.
 
-Clients must branch on HTTP status and stable `code`; human-readable messages must not be parsed for logic. `ServiceResult<T>` is an HTTP transport contract and Domain/Application do not depend on it.
+FinWallet.Api remains independently authenticated/authorized and destination services require the Gateway downstream service credential, so the proxy is an outer boundary rather than the only security control.
 
-### Correlation
+## Controller-based APIs
 
-The current API uses ASP.NET Core request trace identifiers when propagating correlation to external providers. A dedicated validated `X-Correlation-Id` component remains part of the observability backlog. Correlation IDs are not financial transaction IDs or idempotency keys and must not contain PII.
+All project HTTP services use ASP.NET Core controllers. Minimal API mappings are not used.
 
-### Authentication
+## ServiceResult
 
-Protected endpoints use `Authorization: Bearer <access-token>`. JWT access tokens are short lived. Raw access/refresh tokens must never be logged.
+Controller success/failure bodies and platform authentication/rate-limit failures use `ServiceResult<T>`.
 
-JWT challenge and forbidden responses also use `ServiceResult<object>`:
+Clients should branch on:
 
-- HTTP 401 / `UNAUTHORIZED`;
-- HTTP 403 / `FORBIDDEN`.
+1. HTTP status;
+2. stable machine-readable `code`.
 
-### Idempotency
+Do not parse human-readable `message` text for application logic.
 
-Money-changing endpoints require `Idempotency-Key`. Wallet creation is not a money movement; its idempotency is provided by the customer/currency uniqueness invariant. External-provider idempotency keys are separate from request correlation IDs.
+`ServiceResult<T>` remains an HTTP contract; Domain/Application do not depend on it.
 
-### Error handling
+## Correlation
 
-Expected application/domain exceptions are converted centrally into safe `ServiceResult<object>` failures. Unexpected exception details are never returned to clients.
+A caller may send:
 
-## Health
+```http
+X-Correlation-Id: mobile-request-123
+```
 
-### GET `/health/live`
+The shared web platform accepts only bounded alphanumeric/`-`/`_` values. Invalid or absent values are replaced with a generated correlation ID. The resulting value becomes the ASP.NET trace identifier and is returned in the response header.
 
-All HTTP services expose controller-based liveness endpoints and return `ServiceResult<HealthResponse>`.
+Correlation ID is not a transaction ID or idempotency key and must not contain PII.
 
-## Authentication and registration endpoints
+## Authentication
+
+Protected endpoints use:
+
+```http
+Authorization: Bearer <access-token>
+```
+
+JWT is validated at Gateway and again by FinWallet.Api. High-risk transfer flows additionally validate durable server-side session state using `sid`.
+
+Raw access/refresh tokens must never be logged.
+
+## Idempotency
+
+Money-changing wallet transfer requires:
+
+```http
+Idempotency-Key: <stable-client-generated-key>
+```
+
+Wallet creation is not a money movement and is idempotent through the `(CustomerId, Currency)` uniqueness invariant.
+
+Provider request keys are separate from client idempotency and correlation IDs.
+
+## Swagger
+
+Every Web API has Swagger/OpenAPI through `FinWallet.Shared.Web`.
+
+Development defaults:
+
+```text
+Gateway:             http://localhost:8080/swagger
+FinWallet.Api:       http://localhost:8081/swagger
+FakeBank.Api:        http://localhost:8082/swagger
+FakeFraud.Api:       http://localhost:8083/swagger
+FakeCutoff.Api:      http://localhost:8084/swagger
+FakeCampaign.Api:    http://localhost:8085/swagger
+FakeCommunication:   http://localhost:8086/swagger
+```
+
+Production Swagger is disabled by default through `appsettings.Production.json`.
+
+Swagger visibility never bypasses endpoint authorization.
+
+## Authentication endpoints
 
 ### POST `/api/v1/auth/register`
 
-Creates a durable pending customer registration and sends a verification OTP through FakeCommunication. Success returns HTTP `202 Accepted` with `ServiceResult<RegisterCustomerResponse>`.
+Anonymous at Gateway. Creates pending customer + credentials and sends OTP through FakeCommunication via Gateway.
+
+Success: HTTP 202 / `REGISTRATION_ACCEPTED`.
 
 ### POST `/api/v1/auth/registration/verify`
 
-Verifies/consumes registration OTP and activates an eligible pending customer. Success returns HTTP 200 with a body-bearing `ServiceResult<object>`.
+Anonymous at Gateway. Verifies/consumes OTP and activates eligible customer.
+
+Success: HTTP 200 / `REGISTRATION_VERIFIED`.
 
 ### POST `/api/v1/auth/login`
 
-Authenticates an active customer and creates a device-bound server-side session. Success returns HTTP 200 with `ServiceResult<AuthenticationTokensResponse>`.
+Anonymous at Gateway. Validates active customer credentials and creates device-bound server session + access/refresh tokens.
+
+Success: HTTP 200 / `AUTHENTICATED`.
 
 ### POST `/api/v1/auth/refresh`
 
-Rotates a single-use refresh token. Concurrent rotation uses MSSQL compare-and-set semantics; reuse detection revokes the related session/token family.
+Anonymous at Gateway because the opaque refresh token is the credential for this operation. Rotation remains server-side and single-use.
 
 ### POST `/api/v1/auth/logout`
 
@@ -67,11 +123,9 @@ Not implemented yet.
 
 ## Wallet endpoints
 
-Wallet endpoints require a valid access token and derive ownership exclusively from the validated JWT `sub` customer identifier.
-
 ### POST `/api/v1/wallets`
 
-Creates a zero-balance wallet for one supported currency.
+Requires JWT.
 
 Request:
 
@@ -81,40 +135,25 @@ Request:
 }
 ```
 
-Supported values are `TRY`, `USD` and `EUR`.
+Supported values: `TRY`, `USD`, `EUR`.
 
 Behavior:
 
-- first create for a customer/currency returns HTTP 201 / `WALLET_CREATED`;
-- repeated create for the same customer/currency returns HTTP 200 / `WALLET_EXISTS` with the same durable wallet;
-- concurrent create requests converge on the database winner through `UNIQUE(CustomerId, Currency)` + `TryInsertAsync` + reload;
-- new wallets start with available and blocked balance equal to zero;
-- wallet creation does not accept an initial balance and therefore cannot mint money.
-
-Example success data:
-
-```json
-{
-  "walletId": "f98c4910-44c4-42fb-9ff1-c2cd9c0f73bd",
-  "currency": "TRY",
-  "availableBalance": 0,
-  "blockedBalance": 0,
-  "status": "Active",
-  "createdAt": "2026-08-09T15:00:00Z"
-}
-```
+- first customer/currency wallet: HTTP 201 / `WALLET_CREATED`;
+- repeated request: HTTP 200 / `WALLET_EXISTS`;
+- concurrent duplicate create converges on DB winner;
+- new wallet begins with zero available/blocked balance;
+- API cannot mint an initial balance.
 
 ### GET `/api/v1/wallets`
 
-Returns all wallets owned by the authenticated customer ordered by currency. An empty customer wallet set returns HTTP 200 with an empty collection and code `WALLETS_RETRIEVED`.
+Requires JWT. Returns wallets owned by authenticated JWT subject.
 
-## Bank account endpoints
+## Bank-account endpoint
 
 ### POST `/api/v1/bank-accounts`
 
-Requires a valid access token. Opens an external bank account for an internal Wallet owned by the authenticated JWT `sub` customer, or resumes an already durable pending opening.
-
-Request:
+Requires JWT.
 
 ```json
 {
@@ -122,52 +161,130 @@ Request:
 }
 ```
 
-Pending response: HTTP `202 Accepted` with `ServiceResult<BankAccountResponse>`. When the provider account is already final/active, HTTP 200 is returned with code `BANK_ACCOUNT_READY`.
-
-Processing sequence:
+Flow:
 
 ```text
-JWT customer
-  -> owned Wallet lookup
-  -> find/create durable BankAccount(Opening)
-  -> SQL operation completes
-  -> FakeBank HTTP call
-  -> validate provider identity/currency
-  -> apply provider state
-  -> MSSQL status + UpdatedAt compare-and-set
+Gateway JWT
+-> FinWallet JWT/ownership
+-> durable BankAccount(Opening)
+-> SQL operation completes
+-> FinWallet calls Gateway /providers/bank/* with internal caller key
+-> Gateway validates caller and injects downstream key
+-> FakeBank
+-> validate provider identity/currency
+-> CAS-update internal BankAccount state
 ```
 
-Important rules:
+No provider HTTP call executes while a FinWallet SQL transaction is held open.
 
-- another customer's wallet is indistinguishable from a missing wallet;
-- one internal BankAccount may exist per Wallet;
-- internal BankAccount ID and provider Account ID are always separate;
-- provider request key is deterministically derived from the durable internal BankAccount ID;
-- a lost provider HTTP response can be retried without creating a duplicate external account;
-- no external HTTP call runs inside an open FinWallet SQL transaction;
-- pending openings use provider read-only polling;
-- stale results cannot overwrite newer BankAccount state because MSSQL update uses expected status + expected `UpdatedAt`;
-- provider IBAN-like data may be returned to the authenticated owner but must be masked in logs.
+Provider request-key is deterministic from durable internal BankAccount ID, so timeout/lost-response retry does not create a duplicate provider account.
 
-Failure mapping:
+## Wallet transfer endpoint
 
-- 401 `UNAUTHORIZED` / `INVALID_ACCESS_TOKEN`;
-- 404 `WALLET_NOT_FOUND`;
-- 409 `BANK_ACCOUNT_CONFLICT`;
-- 503 retryable provider failure;
-- 502 non-retryable provider contract/state inconsistency.
+### POST `/api/v1/transfers`
 
-## Financial endpoint conventions
+Requires:
 
-All future money-changing operations require:
+- JWT;
+- active durable financial session;
+- `Idempotency-Key`;
+- valid source ownership/destination/currency/lifecycle;
+- internal + external fraud Allow;
+- sufficient source balance.
 
-- authenticated active customer/session;
-- durable idempotency;
-- correlation ID separate from idempotency key;
-- currency-aware amount;
-- internal/external fraud evaluation where applicable;
-- cutoff evaluation for bank workflows where applicable;
-- balanced ledger commit;
-- structured masked financial logging;
-- outbox-driven post-commit notifications;
-- `ServiceResult<T>` response bodies for success and failure.
+Request:
+
+```http
+POST /api/v1/transfers
+Authorization: Bearer <JWT>
+Idempotency-Key: transfer-000001
+Content-Type: application/json
+```
+
+```json
+{
+  "sourceWalletId": "aaaaaaaa-1111-4111-8111-111111111111",
+  "destinationWalletId": "bbbbbbbb-2222-4222-8222-222222222222",
+  "amount": 125.50
+}
+```
+
+Execution order:
+
+```text
+completed durable replay check
+-> durable server session/risk signals
+-> internal fraud
+-> FakeFraud through Gateway
+-> final fraud decision
+-> atomic MSSQL posting
+```
+
+Atomic posting includes:
+
+- durable idempotency state;
+- source/destination balance changes;
+- FinancialTransaction;
+- LedgerJournal;
+- LedgerEntries;
+- persisted Debit/Credit equality verification.
+
+External fraud is fail-closed. If it times out/fails/malforms, financial posting does not start.
+
+Completed replay uses the same idempotency key/request and returns the immutable original transaction without a second money movement or second fraud evaluation.
+
+## Funding status
+
+New wallets start with zero balance. A public BankDeposit/funding endpoint is not implemented yet. Therefore a successful transfer from a newly registered wallet requires a controlled integration fixture that creates a balanced funding transaction/ledger state. Directly updating `Wallets.AvailableBalance` is invalid because it bypasses the ledger.
+
+See `16-happy-path-onboarding.md`.
+
+## Provider/internal routes
+
+Provider routes are not public client APIs:
+
+```text
+/providers/bank/*
+/providers/fraud/*
+/providers/cutoff/*
+/providers/campaign/*
+/providers/communication/*
+```
+
+They require Gateway `InternalService` authorization. Destination provider APIs then require the separate downstream service credential.
+
+## HTTP/platform failures
+
+Examples:
+
+- missing/invalid JWT at Gateway: 401 `GATEWAY_UNAUTHORIZED`;
+- direct provider call without internal caller key: 403/authorization rejection at Gateway;
+- direct backend call without downstream key: 401 `INTERNAL_SERVICE_UNAUTHORIZED`;
+- rate limit: 429 `RATE_LIMITED`;
+- unsupported write content type: 415 `UNSUPPORTED_MEDIA_TYPE`;
+- blocked TRACE/CONNECT: 405 `METHOD_NOT_ALLOWED`;
+- request too large: rejected by Kestrel/YARP before business processing.
+
+## Financial error examples
+
+- invalid financial session: 401 `TRANSFER_SESSION_INVALID`;
+- fraud deny: 403 `TRANSFER_FRAUD_DENIED`;
+- fraud review: 202 `TRANSFER_REVIEW_REQUIRED` and no money movement;
+- missing wallet: 404;
+- idempotency payload conflict: 409 `IDEMPOTENCY_CONFLICT`;
+- insufficient balance: 409 `INSUFFICIENT_BALANCE`;
+- fraud dependency unavailable: 503 `FRAUD_DEPENDENCY_UNAVAILABLE`;
+- currency mismatch: 400 `CURRENCY_MISMATCH`.
+
+## Request limits
+
+Gateway and backends use config-driven:
+
+- per-IP fixed-window rate limits;
+- request-body limits;
+- header-count/total-size limits;
+- request-header timeout;
+- keep-alive timeout;
+- max concurrent connections.
+
+Public limits are intentionally stricter at Gateway; backends retain second-layer limits for bypass/misrouting/internal-runaway protection.
