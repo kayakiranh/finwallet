@@ -6,8 +6,8 @@ using Microsoft.Data.SqlClient;
 namespace FinWallet.Infrastructure.Persistence.SqlServer;
 
 /// <summary>
-/// TR: Login, credential lockout, session ve refresh-token lifecycle state'ini explicit parametreli MSSQL komutları ve kısa transaction sınırlarıyla kalıcılaştırır.
-/// EN: Persists login, credential lockout, session and refresh-token lifecycle state using explicit parameterized MSSQL commands and short transaction boundaries.
+/// TR: Login, credential lockout, session ve refresh-token lifecycle state'ini explicit parametreli MSSQL komutları ve kısa concurrency-safe transaction sınırlarıyla kalıcılaştırır.
+/// EN: Persists login, credential lockout, session and refresh-token lifecycle state using explicit parameterized MSSQL commands and short concurrency-safe transaction boundaries.
 /// </summary>
 public sealed class SqlAuthenticationStore : IAuthenticationStore
 {
@@ -73,44 +73,55 @@ public sealed class SqlAuthenticationStore : IAuthenticationStore
     }
 
     /// <summary>
-    /// TR: Başarısız veya başarılı login sonrası değişen credential lockout state'ini parametreli UPDATE ile kalıcılaştırır.
-    /// EN: Persists credential lockout state changed after failed or successful login using a parameterized UPDATE.
+    /// TR: Başarısız login'i credential satırını UPDLOCK altında güncel state ile yeniden yükleyerek atomik uygular ve paralel yanlış login'lerde lost-update oluşmasını engeller.
+    /// EN: Atomically applies a failed login by reloading the credential row under UPDLOCK and prevents lost updates across concurrent failed-login attempts.
     /// </summary>
-    /// <param name="credential">TR: Güncel güvenlik state'ini taşıyan credential domain nesnesi. EN: Credential domain object carrying current security state.</param>
-    /// <param name="cancellationToken">TR: SQL update iptal sinyali. EN: Cancellation signal for the SQL update.</param>
-    public async Task UpdateCredentialAsync(CustomerCredential credential, CancellationToken cancellationToken)
+    /// <param name="customerId">TR: Başarısız login'in ait olduğu müşteri kimliği. EN: Customer identifier associated with the failed login.</param>
+    /// <param name="failedAt">TR: Başarısız login'in gerçekleştiği UTC zaman bilgisi. EN: UTC timestamp at which the failed login occurred.</param>
+    /// <param name="cancellationToken">TR: SQL transaction iptal sinyali. EN: Cancellation signal for the SQL transaction.</param>
+    public async Task RegisterFailedLoginAsync(
+        Guid customerId,
+        DateTimeOffset failedAt,
+        CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(credential);
-
-        const string sql = """
-            UPDATE dbo.CustomerCredentials
-            SET FailedLoginCount = @FailedLoginCount,
-                LockedUntil = @LockedUntil,
-                PasswordHash = @PasswordHash,
-                PasswordSalt = @PasswordSalt,
-                PasswordHashVersion = @PasswordHashVersion,
-                PasswordChangedAt = @PasswordChangedAt
-            WHERE CustomerId = @CustomerId;
-            """;
+        if (customerId == Guid.Empty)
+        {
+            throw new ArgumentException("Customer identifier cannot be empty.", nameof(customerId));
+        }
 
         await using var connection = _connectionFactory.Create();
         await connection.OpenAsync(cancellationToken);
-        await using var command = new SqlCommand(sql, connection);
-        AddCredentialParameters(command, credential);
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(
+            IsolationLevel.ReadCommitted,
+            cancellationToken);
 
-        var affectedRows = await command.ExecuteNonQueryAsync(cancellationToken);
-        EnsureSingleRow(affectedRows, "Credential update");
+        var currentCredential = await ReadCredentialForUpdateAsync(
+            connection,
+            transaction,
+            customerId,
+            cancellationToken);
+
+        if (currentCredential is null)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw new InvalidOperationException("Credential was not found for failed-login persistence.");
+        }
+
+        currentCredential.RegisterFailedLogin(failedAt);
+        await UpdateCredentialStateAsync(connection, transaction, currentCredential, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
     }
 
     /// <summary>
-    /// TR: Başarılı login sonrasında credential reset state'i, yeni session ve ilk refresh-token hash kaydını tek kısa MSSQL transaction içinde atomik olarak yazar.
-    /// EN: Atomically writes the reset credential state, new session and initial refresh-token hash record within one short MSSQL transaction after successful login.
+    /// TR: Başarılı parola doğrulamasını credential satırını UPDLOCK altında yeniden kontrol ederek finalize eder; password snapshot değişmiş veya paralel denemeler geçici lock oluşturmuşsa session yaratmaz.
+    /// EN: Finalizes successful password verification by rechecking the credential row under UPDLOCK and does not create a session if the password snapshot changed or concurrent attempts created a temporary lock.
     /// </summary>
-    /// <param name="credential">TR: Başarılı login ile resetlenmiş credential state'i. EN: Credential state reset by successful login.</param>
-    /// <param name="session">TR: Yeni müşteri session domain nesnesi. EN: New customer-session domain object.</param>
-    /// <param name="refreshToken">TR: Session'a ait ilk refresh token kaydı. EN: Initial refresh-token record belonging to the session.</param>
+    /// <param name="credential">TR: Parola doğrulamasında kullanılan credential snapshot'ı. EN: Credential snapshot used during password verification.</param>
+    /// <param name="session">TR: Oluşturulmak istenen yeni müşteri session nesnesi. EN: New customer-session object intended to be created.</param>
+    /// <param name="refreshToken">TR: Yeni session'a bağlı ilk refresh-token kaydı. EN: Initial refresh-token record associated with the new session.</param>
     /// <param name="cancellationToken">TR: SQL transaction iptal sinyali. EN: Cancellation signal for the SQL transaction.</param>
-    public async Task CreateSessionAsync(
+    /// <returns>TR: Session transaction'ı güvenli biçimde commit edildiyse true; lock veya password state değişimi nedeniyle reddedildiyse false döndürür. EN: Returns true when the session transaction commits safely, or false when rejected because of lock or password-state changes.</returns>
+    public async Task<bool> TryCreateSessionAsync(
         CustomerCredential credential,
         CustomerSession session,
         RefreshToken refreshToken,
@@ -131,26 +142,26 @@ public sealed class SqlAuthenticationStore : IAuthenticationStore
             IsolationLevel.ReadCommitted,
             cancellationToken);
 
-        const string updateCredentialSql = """
-            UPDATE dbo.CustomerCredentials
-            SET FailedLoginCount = @FailedLoginCount,
-                LockedUntil = @LockedUntil,
-                PasswordHash = @PasswordHash,
-                PasswordSalt = @PasswordSalt,
-                PasswordHashVersion = @PasswordHashVersion,
-                PasswordChangedAt = @PasswordChangedAt
-            WHERE CustomerId = @CustomerId;
-            """;
+        var currentCredential = await ReadCredentialForUpdateAsync(
+            connection,
+            transaction,
+            credential.CustomerId,
+            cancellationToken);
 
-        await using (var credentialCommand = new SqlCommand(updateCredentialSql, connection, transaction))
+        if (currentCredential is null
+            || currentCredential.IsLocked(session.CreatedAt)
+            || !HasSamePasswordMaterial(currentCredential, credential))
         {
-            AddCredentialParameters(credentialCommand, credential);
-            EnsureSingleRow(await credentialCommand.ExecuteNonQueryAsync(cancellationToken), "Credential login reset");
+            await transaction.RollbackAsync(cancellationToken);
+            return false;
         }
 
+        currentCredential.RegisterSuccessfulLogin();
+        await UpdateCredentialStateAsync(connection, transaction, currentCredential, cancellationToken);
         await InsertSessionAsync(connection, transaction, session, cancellationToken);
         await InsertRefreshTokenAsync(connection, transaction, refreshToken, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
+        return true;
     }
 
     /// <summary>
@@ -350,6 +361,90 @@ public sealed class SqlAuthenticationStore : IAuthenticationStore
         }
 
         await transaction.CommitAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// TR: Credential satırını mevcut transaction içinde UPDLOCK/ROWLOCK ile yükler ve domain state olarak materialize eder.
+    /// EN: Loads the credential row under UPDLOCK/ROWLOCK inside the current transaction and materializes it as domain state.
+    /// </summary>
+    /// <param name="connection">TR: Açık SQL connection. EN: Open SQL connection.</param>
+    /// <param name="transaction">TR: Aktif SQL transaction. EN: Active SQL transaction.</param>
+    /// <param name="customerId">TR: Kilit altında yüklenecek müşteri credential kimliği. EN: Customer credential identifier to load under lock.</param>
+    /// <param name="cancellationToken">TR: SQL sorgu iptal sinyali. EN: Cancellation signal for the SQL query.</param>
+    /// <returns>TR: Credential bulunursa domain nesnesini; bulunamazsa null döndürür. EN: Returns the credential domain object when found, otherwise null.</returns>
+    private static async Task<CustomerCredential?> ReadCredentialForUpdateAsync(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        Guid customerId,
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            SELECT
+                CustomerId AS CR_CustomerId,
+                PasswordHash AS CR_PasswordHash,
+                PasswordSalt AS CR_PasswordSalt,
+                PasswordHashVersion AS CR_PasswordHashVersion,
+                FailedLoginCount AS CR_FailedLoginCount,
+                LockedUntil AS CR_LockedUntil,
+                PasswordChangedAt AS CR_PasswordChangedAt
+            FROM dbo.CustomerCredentials WITH (UPDLOCK, ROWLOCK)
+            WHERE CustomerId = @CustomerId;
+            """;
+
+        await using var command = new SqlCommand(sql, connection, transaction);
+        command.Parameters.Add("@CustomerId", SqlDbType.UniqueIdentifier).Value = customerId;
+        await using var reader = await command.ExecuteReaderAsync(CommandBehavior.SingleRow, cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            return null;
+        }
+
+        return SqlAuthenticationMaterializer.ReadCredential(reader, "CR_");
+    }
+
+    /// <summary>
+    /// TR: İki credential snapshot'ının aynı parola hash materyalini temsil edip etmediğini sabit alan karşılaştırmalarıyla belirler.
+    /// EN: Determines whether two credential snapshots represent the same password-hash material using fixed field comparisons.
+    /// </summary>
+    /// <param name="current">TR: DB lock altında yeniden yüklenen güncel credential. EN: Current credential reloaded under a DB lock.</param>
+    /// <param name="verifiedSnapshot">TR: Parola doğrulaması sırasında kullanılan credential snapshot'ı. EN: Credential snapshot used during password verification.</param>
+    /// <returns>TR: Hash, salt, version ve password-change zamanı aynıysa true döndürür. EN: Returns true when hash, salt, version and password-change time are identical.</returns>
+    private static bool HasSamePasswordMaterial(CustomerCredential current, CustomerCredential verifiedSnapshot)
+    {
+        return string.Equals(current.PasswordHash, verifiedSnapshot.PasswordHash, StringComparison.Ordinal)
+            && string.Equals(current.PasswordSalt, verifiedSnapshot.PasswordSalt, StringComparison.Ordinal)
+            && current.PasswordHashVersion == verifiedSnapshot.PasswordHashVersion
+            && current.PasswordChangedAt == verifiedSnapshot.PasswordChangedAt;
+    }
+
+    /// <summary>
+    /// TR: Güncel credential security state'ini mevcut SQL transaction içinde kalıcılaştırır.
+    /// EN: Persists current credential security state inside the existing SQL transaction.
+    /// </summary>
+    /// <param name="connection">TR: Açık SQL connection. EN: Open SQL connection.</param>
+    /// <param name="transaction">TR: Aktif SQL transaction. EN: Active SQL transaction.</param>
+    /// <param name="credential">TR: Kalıcılaştırılacak credential domain state'i. EN: Credential domain state to persist.</param>
+    /// <param name="cancellationToken">TR: SQL update iptal sinyali. EN: Cancellation signal for the SQL update.</param>
+    private static async Task UpdateCredentialStateAsync(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        CustomerCredential credential,
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            UPDATE dbo.CustomerCredentials
+            SET FailedLoginCount = @FailedLoginCount,
+                LockedUntil = @LockedUntil,
+                PasswordHash = @PasswordHash,
+                PasswordSalt = @PasswordSalt,
+                PasswordHashVersion = @PasswordHashVersion,
+                PasswordChangedAt = @PasswordChangedAt
+            WHERE CustomerId = @CustomerId;
+            """;
+
+        await using var command = new SqlCommand(sql, connection, transaction);
+        AddCredentialParameters(command, credential);
+        EnsureSingleRow(await command.ExecuteNonQueryAsync(cancellationToken), "Credential update");
     }
 
     /// <summary>
