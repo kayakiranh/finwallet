@@ -1,83 +1,150 @@
-# Testing Strategy
+# Test Stratejisi / Testing Strategy
 
-## Current status
+## Türkçe
 
-Before the gateway/platform hardening phase, the solution did not contain an xUnit test project and did not use Moq. This was a real testing gap rather than a documentation gap.
-
-The solution now includes `tests/FinWallet.Application.Tests` using:
-
+### Güncel durum
+Gateway/platform hardening öncesinde solution'da test projesi ve Moq kullanımı yoktu. Artık `tests/FinWallet.Application.Tests` vardır ve:
 - xUnit v3;
 - Moq;
-- .NET 8 / Microsoft Testing Platform integration.
+- .NET 8 / Microsoft Testing Platform
+kullanır.
 
-The first test covers `OpenBankAccountHandler` and uses strict mocks for `IWalletStore`, `IBankAccountStore` and `IBankProvider`. It verifies that a missing owned wallet fails before any external-bank call is attempted.
+İlk strict-mock test `OpenBankAccountHandler` üzerinde `IWalletStore`, `IBankAccountStore` ve `IBankProvider` bağımlılıklarını mock eder; owned wallet bulunmazsa external bank provider'ın hiç çağrılmadığını doğrular.
 
-## What should be mocked
-
-Unit tests should mock boundaries whose behavior is not the subject of the test:
-
+### Neyi mock etmeliyiz?
+Application orchestration testlerinde davranışı testin konusu olmayan boundary'ler mock edilebilir:
 - `IBankProvider`;
 - `IExternalFraudProvider`;
 - `ICommunicationGateway`;
-- Application persistence interfaces when testing pure orchestration;
-- time through `TimeProvider` where time-sensitive behavior is being tested.
+- persistence interface'leri;
+- zaman bağımlılığı için `TimeProvider`.
 
-Strict mocks are preferred for financial orchestration tests because unexpected provider/database calls are usually meaningful bugs.
+Financial orchestration'da strict mock tercih edilir; beklenmeyen provider/DB çağrısı önemli bug olabilir.
 
-## What should not be proven with mocks
-
-Mocks cannot prove financial persistence correctness. The following behaviors require integration/concurrency tests against real infrastructure:
-
-- MSSQL transaction rollback;
-- `UPDLOCK` / `HOLDLOCK` / Serializable behavior;
-- unique-key races;
+### Mock ile kanıtlanamayacaklar
+Aşağıdakiler gerçek infrastructure integration/concurrency test ister:
+- MSSQL rollback;
+- Serializable / `UPDLOCK` / `HOLDLOCK`;
+- unique-key race;
 - refresh-token compare-and-set;
-- wallet-transfer deterministic row-lock ordering;
+- deterministic wallet lock ordering;
 - idempotency range locking;
-- double-entry SQL SUM(Debit) = SUM(Credit) verification;
-- SQL connection pooling behavior;
-- Redis Lua atomicity;
-- Redis reconnect/fail-closed behavior;
-- YARP routing, authorization, health checks and load balancing.
+- persisted Debit=Credit aggregate check;
+- connection pooling behavior;
+- Redis Lua atomicity/reconnect/fail-closed;
+- YARP route/auth/health/load balancing;
+- Gateway direct-bypass rejection.
 
-## Required next integration suite
+### Gerekli integration suite
+En az:
+1. concurrent duplicate registration;
+2. concurrent refresh rotation;
+3. aynı Idempotency-Key ile 10 transfer;
+4. same key + different payload;
+5. tek source wallet'tan 100 concurrent debit;
+6. A->B ve B->A opposite-direction deadlock testi;
+7. OTP verify sırasında Redis unavailable;
+8. transfer öncesi FakeFraud timeout;
+9. Gateway JWT yok;
+10. backend downstream key yok;
+11. rate-limit rejection;
+12. ledger imbalance injection -> rollback.
 
-A future `FinWallet.IntegrationTests` project should provision isolated MSSQL and Redis instances and execute at minimum:
-
-1. Concurrent duplicate registration.
-2. Concurrent refresh-token rotation.
-3. Ten identical transfer requests with one `Idempotency-Key`.
-4. Same key with a different transfer payload.
-5. One hundred concurrent debits from one source wallet.
-6. Opposite-direction transfers to expose deadlock regressions.
-7. Redis unavailable during OTP verification.
-8. Fraud provider timeout before transfer posting.
-9. Gateway request without JWT.
-10. Direct backend request without downstream service key.
-11. Gateway rate-limit rejection.
-12. Ledger imbalance injection proving rollback.
-
-## Financial invariant test
-
-A load/concurrency test should always reconcile the durable result instead of trusting HTTP success counts alone:
-
+### Finansal invariant testi
+Load test yalnız HTTP success count'a güvenmez:
 ```text
-Initial wallet balances
+Initial balances
 + durable credits
 - durable debits
-= final wallet balances
-
-and
+= final balances
 
 SUM(Ledger Debit) = SUM(Ledger Credit)
 ```
+Ayrıca successful FinancialTransactions, IdempotencyRecords ve LedgerJournals reconcile etmelidir.
 
-For a controlled test beginning with 100,000 units and many concurrent transfer attempts, successful `FinancialTransactions`, final wallet balances and ledger journals must reconcile exactly.
+### CI policy
+CI:
+```text
+restore
+-> Release build --warnaserror
+-> dotnet test --no-build
+```
+çalıştırır. Yeni project `FinWallet.sln` içine eklenmeden feature tamamlanmış sayılmaz.
 
-## CI policy
+### Mevcut coverage yorumu
+Unit-test altyapısı artık vardır ancak coverage halen başlangıç seviyesindedir. “Moq eklendi” gerçek MSSQL/Redis/YARP doğruluğu kanıtlandı anlamına gelmez.
 
-CI must restore, build the complete solution in Release mode with warnings treated as errors, then execute the test projects. New projects must be included in `FinWallet.sln`; otherwise a green solution build would not validate them.
+---
 
-## Mocking conclusion
+## English
 
-Mocking is now present for Application orchestration. It is intentionally not used as a substitute for real MSSQL/Redis/YARP tests. The financial concurrency and infrastructure test suite remains a release-hardening requirement.
+### Current status
+Before Gateway/platform hardening, the solution had no test project and no Moq usage. It now contains `tests/FinWallet.Application.Tests` using:
+- xUnit v3;
+- Moq;
+- .NET 8 / Microsoft Testing Platform.
+
+The first strict-mock test targets `OpenBankAccountHandler`, mocks `IWalletStore`, `IBankAccountStore` and `IBankProvider`, and proves that the external bank provider is not called when the owned wallet is missing.
+
+### What should be mocked?
+Application orchestration tests may mock boundaries whose behavior is not the subject of the test:
+- `IBankProvider`;
+- `IExternalFraudProvider`;
+- `ICommunicationGateway`;
+- persistence interfaces;
+- `TimeProvider` for time-dependent behavior.
+
+Strict mocks are preferred for financial orchestration because an unexpected provider/database call may be a meaningful defect.
+
+### What cannot be proven with mocks?
+The following require real infrastructure integration/concurrency tests:
+- MSSQL rollback;
+- Serializable / `UPDLOCK` / `HOLDLOCK`;
+- unique-key races;
+- refresh-token compare-and-set;
+- deterministic wallet lock ordering;
+- idempotency range locking;
+- persisted Debit=Credit aggregate validation;
+- connection-pooling behavior;
+- Redis Lua atomicity/reconnect/fail-closed behavior;
+- YARP routing/auth/health/load balancing;
+- Gateway direct-bypass rejection.
+
+### Required integration suite
+At minimum:
+1. concurrent duplicate registration;
+2. concurrent refresh rotation;
+3. ten transfers with the same Idempotency-Key;
+4. same key + different payload;
+5. one hundred concurrent debits from one source wallet;
+6. opposite-direction A->B and B->A deadlock test;
+7. Redis unavailable during OTP verify;
+8. FakeFraud timeout before transfer posting;
+9. Gateway request without JWT;
+10. backend request without downstream key;
+11. rate-limit rejection;
+12. ledger imbalance injection -> rollback.
+
+### Financial invariant test
+Load tests must not trust HTTP success counts alone:
+```text
+Initial balances
++ durable credits
+- durable debits
+= final balances
+
+SUM(Ledger Debit) = SUM(Ledger Credit)
+```
+Successful FinancialTransactions, IdempotencyRecords and LedgerJournals must also reconcile.
+
+### CI policy
+CI runs:
+```text
+restore
+-> Release build --warnaserror
+-> dotnet test --no-build
+```
+A new project is not considered complete until it is included in `FinWallet.sln`.
+
+### Current coverage assessment
+Unit-test infrastructure now exists, but coverage is still at an early stage. “Moq is present” does not mean real MSSQL/Redis/YARP correctness has been proven.
