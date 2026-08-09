@@ -1,11 +1,16 @@
 using System.Text;
+using FinWallet.Api.Configuration;
 using FinWallet.Api.Errors;
 using FinWallet.Application.Authentication;
 using FinWallet.Application.Communication;
+using FinWallet.Application.Fraud;
 using FinWallet.Application.Registration;
+using FinWallet.Domain.Fraud;
+using FinWallet.Domain.Fraud.Rules;
 using FinWallet.Domain.Registration;
 using FinWallet.Infrastructure.Authentication;
 using FinWallet.Infrastructure.Communication;
+using FinWallet.Infrastructure.Fraud;
 using FinWallet.Infrastructure.Persistence.Redis;
 using FinWallet.Infrastructure.Persistence.SqlServer;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -32,13 +37,12 @@ ArgumentException.ThrowIfNullOrWhiteSpace(jwtAudience);
 var jwtSigningKey = builder.Configuration["FinWallet:Security:Jwt:SigningKey"];
 ArgumentException.ThrowIfNullOrWhiteSpace(jwtSigningKey);
 
-var fakeCommunicationBaseUrl = builder.Configuration["FinWallet:Integrations:FakeCommunication:BaseUrl"];
-ArgumentException.ThrowIfNullOrWhiteSpace(fakeCommunicationBaseUrl);
-
-var normalizedFakeCommunicationBaseUrl = fakeCommunicationBaseUrl.EndsWith("/", StringComparison.Ordinal)
-    ? fakeCommunicationBaseUrl
-    : $"{fakeCommunicationBaseUrl}/";
-var fakeCommunicationBaseUri = new Uri(normalizedFakeCommunicationBaseUrl, UriKind.Absolute);
+var fakeCommunicationBaseUri = IntegrationUriFactory.CreateRequiredBaseUri(
+    builder.Configuration["FinWallet:Integrations:FakeCommunication:BaseUrl"],
+    "FinWallet:Integrations:FakeCommunication:BaseUrl");
+var fakeFraudBaseUri = IntegrationUriFactory.CreateRequiredBaseUri(
+    builder.Configuration["FinWallet:Integrations:FakeFraud:BaseUrl"],
+    "FinWallet:Integrations:FakeFraud:BaseUrl");
 
 var sqlSettings = new SqlServerSettings(sqlConnectionString);
 var otpSecuritySettings = new RegistrationOtpSecuritySettings(registrationOtpPepper);
@@ -64,6 +68,13 @@ builder.Services.AddSingleton<IRefreshTokenGenerator, SecureRefreshTokenGenerato
 builder.Services.AddSingleton(jwtSettings);
 builder.Services.AddSingleton<IAccessTokenIssuer, JwtAccessTokenIssuer>();
 
+builder.Services.AddSingleton<IInternalFraudRule, TransactionAmountFraudRule>();
+builder.Services.AddSingleton<IInternalFraudRule, DailyAmountFraudRule>();
+builder.Services.AddSingleton<IInternalFraudRule, VelocityFraudRule>();
+builder.Services.AddSingleton<IInternalFraudRule, NewDeviceBeneficiaryFraudRule>();
+builder.Services.AddSingleton<InternalFraudEngine>();
+builder.Services.AddSingleton<FraudDecisionPolicy>();
+
 builder.Services.AddScoped<RegisterCustomerHandler>();
 builder.Services.AddScoped<VerifyRegistrationOtpHandler>();
 builder.Services.AddScoped<LoginCustomerHandler>();
@@ -73,6 +84,11 @@ builder.Services.AddHttpClient<ICommunicationGateway, FakeCommunicationGateway>(
 {
     client.BaseAddress = fakeCommunicationBaseUri;
     client.Timeout = TimeSpan.FromSeconds(3);
+});
+builder.Services.AddHttpClient<IExternalFraudProvider, FakeFraudProvider>(client =>
+{
+    client.BaseAddress = fakeFraudBaseUri;
+    client.Timeout = TimeSpan.FromSeconds(2);
 });
 
 builder.Services
