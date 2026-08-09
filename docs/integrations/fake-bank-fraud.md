@@ -4,7 +4,7 @@
 
 `FakeBank.Api` and `FakeFraud.Api` simulate third-party providers and intentionally stay outside the FinWallet modular monolith. Their DTO/status vocabularies are translated by Infrastructure adapters/anti-corruption layers rather than leaking into FinWallet Domain.
 
-All HTTP APIs use controller-based ASP.NET Core Web API. Minimal API endpoint mappings are forbidden and all response bodies use `ServiceResult<T>`.
+All HTTP endpoints are controller-based ASP.NET Core Web API endpoints. Minimal API route mappings are forbidden. Success and error response bodies use `ServiceResult<T>`.
 
 ## FakeBank.Api
 
@@ -119,6 +119,51 @@ Input deliberately excludes raw PII/secrets. It carries opaque references and ri
 - twenty-four-hour transaction amount;
 - optional merchant identifier.
 
+### HTTP contract
+
+`POST /api/v1/fraud/evaluate`
+
+The endpoint is implemented by `FraudController` and returns `ServiceResult<FraudEvaluationResponse>`.
+
+Example request:
+
+```json
+{
+  "transactionReference": "3a6ca9e8-f31c-4294-9921-8eb0d93b309c",
+  "customerReference": "42302cb6-cad3-49a7-a5a1-d1e51bf65291",
+  "transactionType": "Purchase",
+  "amount": 12000,
+  "currency": "TRY",
+  "countryCode": "TR",
+  "deviceReference": "device-opaque-reference",
+  "isNewDevice": true,
+  "transactionCountLastFiveMinutes": 2,
+  "amountLastTwentyFourHours": 15000,
+  "merchantId": "MRC-001"
+}
+```
+
+Example successful response shape:
+
+```json
+{
+  "isSuccess": true,
+  "code": "FRAUD_EVALUATED",
+  "message": "External fraud evaluation completed.",
+  "data": {
+    "providerReference": "0a55b720-3cc1-4daa-9710-bcb0d74440c2",
+    "decision": 2,
+    "riskScore": 30,
+    "reasonCodes": ["NEW_DEVICE_HIGH_AMOUNT"]
+  },
+  "errors": []
+}
+```
+
+The provider enum is a transport detail. `FakeFraudProvider` maps numeric provider decisions into the provider-independent FinWallet `FraudDecision` enum. Application and Domain do not reference FakeFraud DTOs or `ServiceResult<T>`.
+
+The FinWallet HTTP adapter propagates `X-Correlation-Id` separately from the financial `TransactionReference` and uses a fixed two-second provider timeout.
+
 ### Deterministic dummy rules
 
 Initial examples:
@@ -131,13 +176,23 @@ Initial examples:
 - >= 75,000 total / 24h -> Review;
 - new device + amount >= 10,000 -> Review;
 - blocked merchant seed -> Deny;
-- simulator-only high-risk-country seed -> Deny.
+- simulated high-risk-country seeds `XX` / `ZZ` -> Deny.
+
+The `XX`/`ZZ` country values are simulator-only dummy seeds and do not represent a production risk classification for real countries.
 
 Deny signals take precedence over Review. If no external risk signal exists, result is Allow.
 
+### HTTP failure simulation
+
+`X-Fake-Mode` supports:
+
+- `fail` -> HTTP 503 `ServiceResult` failure;
+- `delay` -> approximately two-second delay;
+- `timeout` -> long delay intended to exceed FinWallet's external-provider timeout.
+
 ### Final FinWallet fraud decision
 
-FinWallet combines internal and external decisions through an explicit policy:
+The external result is deliberately kept separate from the future internal fraud result. FinWallet processing will combine them through an explicit policy:
 
 ```text
 Internal Fraud Rules
