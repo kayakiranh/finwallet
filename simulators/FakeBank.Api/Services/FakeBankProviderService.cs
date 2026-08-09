@@ -15,10 +15,11 @@ public sealed class FakeBankProviderService
     private readonly ConcurrentDictionary<string, AccountRequestRecord> _accountRequests = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, TransactionRequestRecord> _transactionRequests = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<Guid, object> _accountLocks = new();
+    private readonly ConcurrentDictionary<string, object> _requestLocks = new(StringComparer.Ordinal);
 
     /// <summary>
-    /// TR: Currency bazlı dış banka hesabı açar; aynı request key + aynı payload tekrarında aynı hesabı döndürür, farklı payload ile key reuse edilirse conflict üretir.
-    /// EN: Opens a currency-specific external bank account; repeated use of the same request key with the same payload returns the same account, while reuse with a different payload produces a conflict.
+    /// TR: Currency bazlı dış banka hesabı açar; aynı request key + aynı payload tekrarında aynı hesabı döndürür, farklı payload ile key reuse edilirse conflict üretir ve eşzamanlı ilk istekleri request-key lock altında serialize eder.
+    /// EN: Opens a currency-specific external bank account; repeated use of the same request key with the same payload returns the same account, reuse with a different payload produces a conflict, and concurrent first requests are serialized under a request-key lock.
     /// </summary>
     /// <param name="request">TR: Hesap açılış provider isteği. EN: Provider account-opening request.</param>
     /// <param name="pending">TR: True ise hesabın Pending durumda bırakılıp daha sonra finalize edilmesini sağlar. EN: When true, leaves the account Pending for later finalization.</param>
@@ -34,36 +35,32 @@ public sealed class FakeBankProviderService
         var currency = request.Currency.Trim().ToUpperInvariant();
         var fingerprint = $"{request.ExternalCustomerReference:N}|{currency}";
 
-        if (_accountRequests.TryGetValue(key, out var existing))
+        lock (GetRequestLock($"account:{key}"))
         {
-            EnsureSameFingerprint(existing.Fingerprint, fingerprint);
-            return ToAccountResponse(_accounts[existing.AccountId]);
+            if (_accountRequests.TryGetValue(key, out var existing))
+            {
+                EnsureSameFingerprint(existing.Fingerprint, fingerprint);
+                return ToAccountResponse(_accounts[existing.AccountId]);
+            }
+
+            var accountId = Guid.NewGuid();
+            var account = new FakeBankAccount(
+                accountId,
+                request.ExternalCustomerReference,
+                currency,
+                CreateIbanLikeNumber(accountId, currency),
+                FakeBankAccountStatus.Pending,
+                DateTimeOffset.UtcNow);
+
+            if (!pending)
+            {
+                account.Activate();
+            }
+
+            _accounts[accountId] = account;
+            _accountRequests[key] = new AccountRequestRecord(fingerprint, accountId);
+            return ToAccountResponse(account);
         }
-
-        var accountId = Guid.NewGuid();
-        var account = new FakeBankAccount(
-            accountId,
-            request.ExternalCustomerReference,
-            currency,
-            CreateIbanLikeNumber(accountId, currency),
-            FakeBankAccountStatus.Pending,
-            DateTimeOffset.UtcNow);
-
-        if (!pending)
-        {
-            account.Activate();
-        }
-
-        var record = new AccountRequestRecord(fingerprint, accountId);
-        if (!_accountRequests.TryAdd(key, record))
-        {
-            var raced = _accountRequests[key];
-            EnsureSameFingerprint(raced.Fingerprint, fingerprint);
-            return ToAccountResponse(_accounts[raced.AccountId]);
-        }
-
-        _accounts[accountId] = account;
-        return ToAccountResponse(account);
     }
 
     /// <summary>
@@ -83,8 +80,8 @@ public sealed class FakeBankProviderService
     }
 
     /// <summary>
-    /// TR: Deposit/Withdrawal provider isteğini idempotent olarak oluşturur; pending değilse finansal etkiyi account lock altında yalnızca bir kez uygular.
-    /// EN: Creates a Deposit/Withdrawal provider request idempotently and, when not pending, applies the financial effect exactly once under the account lock.
+    /// TR: Deposit/Withdrawal provider isteğini idempotent olarak oluşturur; eşzamanlı aynı request key isteklerini serialize eder ve pending değilse finansal etkiyi account lock altında yalnızca bir kez uygular.
+    /// EN: Creates a Deposit/Withdrawal provider request idempotently, serializes concurrent requests using the same request key and, when not pending, applies the financial effect exactly once under the account lock.
     /// </summary>
     /// <param name="request">TR: Harici para hareketi isteği. EN: External money-movement request.</param>
     /// <param name="pending">TR: True ise finansal etki finalize aşamasına ertelenir. EN: When true, defers financial effect until finalization.</param>
@@ -101,37 +98,34 @@ public sealed class FakeBankProviderService
         var key = request.RequestKey.Trim();
         var fingerprint = $"{request.AccountId:N}|{request.TransactionType}|{request.Amount:G29}|{currency}";
 
-        if (_transactionRequests.TryGetValue(key, out var existing))
+        lock (GetRequestLock($"transaction:{key}"))
         {
-            EnsureSameFingerprint(existing.Fingerprint, fingerprint);
-            return ToTransactionResponse(_transactions[existing.TransactionId], account.Balance);
+            if (_transactionRequests.TryGetValue(key, out var existing))
+            {
+                EnsureSameFingerprint(existing.Fingerprint, fingerprint);
+                return ToTransactionResponse(_transactions[existing.TransactionId], account.Balance);
+            }
+
+            var transaction = new FakeBankTransaction(
+                Guid.NewGuid(),
+                request.AccountId,
+                key,
+                request.TransactionType,
+                request.Amount,
+                currency,
+                FakeBankTransactionStatus.Pending,
+                DateTimeOffset.UtcNow);
+
+            _transactions[transaction.TransactionId] = transaction;
+            _transactionRequests[key] = new TransactionRequestRecord(fingerprint, transaction.TransactionId);
+
+            if (!pending)
+            {
+                return FinalizeTransaction(transaction.TransactionId, succeed: true);
+            }
+
+            return ToTransactionResponse(transaction, account.Balance);
         }
-
-        var transaction = new FakeBankTransaction(
-            Guid.NewGuid(),
-            request.AccountId,
-            key,
-            request.TransactionType,
-            request.Amount,
-            currency,
-            FakeBankTransactionStatus.Pending,
-            DateTimeOffset.UtcNow);
-
-        var record = new TransactionRequestRecord(fingerprint, transaction.TransactionId);
-        if (!_transactionRequests.TryAdd(key, record))
-        {
-            var raced = _transactionRequests[key];
-            EnsureSameFingerprint(raced.Fingerprint, fingerprint);
-            return ToTransactionResponse(_transactions[raced.TransactionId], account.Balance);
-        }
-
-        _transactions[transaction.TransactionId] = transaction;
-        if (!pending)
-        {
-            FinalizeTransaction(transaction.TransactionId, succeed: true);
-        }
-
-        return ToTransactionResponse(transaction, account.Balance);
     }
 
     /// <summary>
@@ -207,6 +201,11 @@ public sealed class FakeBankProviderService
     /// <param name="accountId">TR: Provider hesap kimliği. EN: Provider account identifier.</param>
     /// <returns>TR: Hesaba ait lock nesnesini döndürür. EN: Returns lock object associated with account.</returns>
     private object GetAccountLock(Guid accountId) => _accountLocks.GetOrAdd(accountId, static _ => new object());
+
+    /// <summary>TR: Aynı provider request key ile yarışan ilk create isteklerini serialize etmek için operation-prefixed request lock nesnesi döndürür. EN: Returns an operation-prefixed request lock used to serialize concurrent first-create requests sharing the same provider request key.</summary>
+    /// <param name="requestKey">TR: Operation prefix içeren normalize provider request key. EN: Normalized provider request key including the operation prefix.</param>
+    /// <returns>TR: Request key'e ait process-lifetime lock nesnesini döndürür. EN: Returns the process-lifetime lock object associated with the request key.</returns>
+    private object GetRequestLock(string requestKey) => _requestLocks.GetOrAdd(requestKey, static _ => new object());
 
     /// <summary>TR: Aynı request key'in farklı payload ile tekrar kullanımını engeller. EN: Rejects reuse of the same request key with a different payload.</summary>
     /// <param name="existing">TR: İlk isteğin fingerprint'i. EN: Fingerprint from first request.</param>
