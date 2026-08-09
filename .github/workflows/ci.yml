@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   build:
-    name: Build .NET 8 solution
+    name: Build and test .NET 8 solution
     runs-on: ubuntu-latest
 
     steps:
@@ -32,3 +32,6 @@ jobs:
 
       - name: Build solution
         run: dotnet build FinWallet.sln --configuration Release --no-restore --warnaserror
+
+      - name: Run tests
+        run: dotnet test FinWallet.sln --configuration Release --no-build

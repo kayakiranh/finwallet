@@ -1,8 +1,11 @@
 using FinWallet.Application.Authentication;
 using FinWallet.Application.Banking;
 using FinWallet.Application.Registration;
+using FinWallet.Application.Transfers;
 using FinWallet.Application.Wallets;
 using FinWallet.Domain.Registration;
+using FinWallet.Domain.Shared;
+using FinWallet.Domain.Wallets;
 using FinWallet.Shared.Contracts;
 using Microsoft.AspNetCore.Diagnostics;
 
@@ -46,6 +49,17 @@ public sealed class ApiExceptionHandler : IExceptionHandler
             InvalidCredentialsException => new(StatusCodes.Status401Unauthorized, "INVALID_CREDENTIALS", "The supplied credentials are invalid."),
             RefreshTokenReuseDetectedException => new(StatusCodes.Status401Unauthorized, "REFRESH_TOKEN_REUSE_DETECTED", "The session was revoked because refresh-token reuse was detected."),
             InvalidRefreshTokenException => new(StatusCodes.Status401Unauthorized, "INVALID_REFRESH_TOKEN", "The refresh token is invalid or no longer usable."),
+            WalletTransferSessionInvalidException => new(StatusCodes.Status401Unauthorized, "TRANSFER_SESSION_INVALID", "The financial session is invalid or no longer active."),
+            WalletTransferFraudDeniedException => new(StatusCodes.Status403Forbidden, "TRANSFER_FRAUD_DENIED", "The transfer was denied by fraud controls."),
+            WalletTransferFraudReviewRequiredException => new(StatusCodes.Status202Accepted, "TRANSFER_REVIEW_REQUIRED", "The transfer requires additional review and no money was moved."),
+            WalletTransferSourceNotFoundException => new(StatusCodes.Status404NotFound, "SOURCE_WALLET_NOT_FOUND", "The source wallet was not found."),
+            WalletTransferDestinationNotFoundException => new(StatusCodes.Status404NotFound, "DESTINATION_WALLET_NOT_FOUND", "The destination wallet was not found."),
+            WalletTransferIdempotencyConflictException => new(StatusCodes.Status409Conflict, "IDEMPOTENCY_CONFLICT", "The Idempotency-Key was already used with a different transfer request."),
+            WalletTransferInProgressException => new(StatusCodes.Status409Conflict, "TRANSFER_IN_PROGRESS", "An identical transfer request is already in progress."),
+            WalletTransferUnavailableException => new(StatusCodes.Status409Conflict, "TRANSFER_UNAVAILABLE", "One or more wallets cannot process this transfer."),
+            InsufficientBalanceException => new(StatusCodes.Status409Conflict, "INSUFFICIENT_BALANCE", "The source wallet has insufficient available balance."),
+            WalletTransferFraudUnavailableException => new(StatusCodes.Status503ServiceUnavailable, "FRAUD_DEPENDENCY_UNAVAILABLE", "The required fraud service is temporarily unavailable."),
+            CurrencyMismatchException => new(StatusCodes.Status400BadRequest, "CURRENCY_MISMATCH", "The wallet currencies do not match."),
             WalletConcurrencyException => new(StatusCodes.Status409Conflict, "WALLET_CONFLICT", "The wallet state changed concurrently. Retry the operation."),
             BankAccountWalletNotFoundException => new(StatusCodes.Status404NotFound, "WALLET_NOT_FOUND", "The wallet was not found."),
             BankAccountConcurrencyException => new(StatusCodes.Status409Conflict, "BANK_ACCOUNT_CONFLICT", "The bank account state changed concurrently. Retry the operation."),
