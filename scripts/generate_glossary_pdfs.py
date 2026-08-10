@@ -38,10 +38,11 @@ def rebuild_source() -> bytes:
         for index in range(1, 6)
     ]
 
-    # The temporary split between part01 and part02 lost one boundary character.
-    # Restore it here; the SHA-256 check below makes the reconstruction fail closed
-    # if any payload byte differs from the authoritative glossary source.
-    encoded = parts[0] + "w" + "".join(parts[1:])
+    # The temporary API transport used to seed this large source dropped the
+    # first character at three chunk boundaries. Restore those exact boundary
+    # characters here. SHA-256 verification below fails closed if any byte is
+    # still different from the authoritative generated glossary source.
+    encoded = parts[0] + "w" + parts[1] + "/" + parts[2] + "o" + parts[3] + parts[4]
     markdown_bytes = bz2.decompress(base64.b64decode(encoded))
     actual_sha256 = hashlib.sha256(markdown_bytes).hexdigest()
     if actual_sha256 != EXPECTED_SHA256:
