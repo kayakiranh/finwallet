@@ -26,7 +26,11 @@
 19. [18 - Performance Review / Performans İncelemesi](18-performance-review.md)
 20. [19 - Final Technical Review / Son Teknik İnceleme](19-final-technical-review.md)
 21. [20 - Docker Runbook / Docker Çalıştırma Rehberi](20-docker-runbook.md)
-22. [ADR Index / ADR İndeksi](adr/README.md)
+22. [21 - End-to-End Happy Path / Uçtan Uca Başarılı Akış](21-happy-path.md)
+23. [22 - Fraud Path / Fraud Akışı](22-fraud-path.md)
+24. [23 - Fail Path / Hata ve Recovery Akışı](23-fail-path.md)
+25. [24 - Error Codes / Hata Kodları](24-error-codes.md)
+26. [ADR Index / ADR İndeksi](adr/README.md)
 
 ### Yeni geliştirici için okuma sırası
 1. `00-master-specification.md` — proje scope ve invariant'lar.
@@ -34,12 +38,15 @@
 3. `02-architecture.md` — katmanlar, runtime topology ve trust boundary'ler.
 4. `17-ai-architecture-decisions.md` — neden bu mimarinin seçildiği.
 5. `04-api-guide.md` — endpoint ve HTTP sözleşmeleri.
-6. `16-happy-path-onboarding.md` — register'dan transfere çağrı sırası.
-7. `07-database.md` ve `08-financial-flows.md` — persistence ve accounting.
-8. `09-security.md` ve `15-gateway-platform-security.md` — güvenlik modeli.
-9. `10-testing.md` — mock ve gerçek altyapı test ayrımı.
-10. `20-docker-runbook.md` — tüm servisleri Docker ile build/start/stop/debug etme, volume ve backup yönetimi.
-11. `18-performance-review.md` ve `19-final-technical-review.md` — tuning ve kalan teknik borç.
+6. `21-happy-path.md` — register, OTP, login, wallet, bank account ve BankDeposit'in gerçek sıralı akışı.
+7. `22-fraud-path.md` — Allow/Review/Deny/fail-closed fraud dalları.
+8. `23-fail-path.md` — auth, bank, fraud, idempotency ve notification failure/recovery davranışları.
+9. `24-error-codes.md` — Gateway, FinWallet, provider ve background machine code kataloğu.
+10. `07-database.md` ve `08-financial-flows.md` — persistence ve accounting.
+11. `09-security.md` ve `15-gateway-platform-security.md` — güvenlik modeli.
+12. `10-testing.md` — mock ve gerçek altyapı test ayrımı.
+13. `20-docker-runbook.md` — tüm servisleri Docker ile build/start/stop/debug etme, volume ve backup yönetimi.
+14. `18-performance-review.md` ve `19-final-technical-review.md` — tuning ve final teknik durum.
 
 ### Güncel runtime topolojisi
 ```text
@@ -78,7 +85,11 @@ Bir feature tamamlanmış sayılmadan önce etkilenen API, database, security, i
 19. [18 - Performance Review](18-performance-review.md)
 20. [19 - Final Technical Review](19-final-technical-review.md)
 21. [20 - Docker Runbook](20-docker-runbook.md)
-22. [ADR Index](adr/README.md)
+22. [21 - End-to-End Happy Path](21-happy-path.md)
+23. [22 - Fraud Path](22-fraud-path.md)
+24. [23 - Fail Path](23-fail-path.md)
+25. [24 - Error Codes](24-error-codes.md)
+26. [ADR Index](adr/README.md)
 
 ### Recommended reading order for a new engineer
 1. `00-master-specification.md` — project scope and invariants.
@@ -86,12 +97,15 @@ Bir feature tamamlanmış sayılmadan önce etkilenen API, database, security, i
 3. `02-architecture.md` — layers, runtime topology and trust boundaries.
 4. `17-ai-architecture-decisions.md` — why the architecture evolved this way.
 5. `04-api-guide.md` — endpoint and HTTP contracts.
-6. `16-happy-path-onboarding.md` — call sequence from registration to transfer.
-7. `07-database.md` and `08-financial-flows.md` — persistence and accounting.
-8. `09-security.md` and `15-gateway-platform-security.md` — security model.
-9. `10-testing.md` — mocks versus real-infrastructure tests.
-10. `20-docker-runbook.md` — build/start/stop/debug the complete Docker stack and manage volumes/backups.
-11. `18-performance-review.md` and `19-final-technical-review.md` — tuning and remaining technical debt.
+6. `21-happy-path.md` — actual ordered register, OTP, login, wallet, bank-account and BankDeposit flow.
+7. `22-fraud-path.md` — Allow/Review/Deny/fail-closed fraud branches.
+8. `23-fail-path.md` — auth, bank, fraud, idempotency and notification failure/recovery behavior.
+9. `24-error-codes.md` — Gateway, FinWallet, provider and background machine-code catalog.
+10. `07-database.md` and `08-financial-flows.md` — persistence and accounting.
+11. `09-security.md` and `15-gateway-platform-security.md` — security model.
+12. `10-testing.md` — mocks versus real-infrastructure tests.
+13. `20-docker-runbook.md` — build/start/stop/debug the complete Docker stack and manage volumes/backups.
+14. `18-performance-review.md` and `19-final-technical-review.md` — tuning and final technical status.
 
 ### Current runtime topology
 ```text
