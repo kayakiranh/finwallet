@@ -30,28 +30,31 @@
 23. [22 - Fraud Path / Fraud Akışı](22-fraud-path.md)
 24. [23 - Fail Path / Hata ve Recovery Akışı](23-fail-path.md)
 25. [24 - Error Codes / Hata Kodları](24-error-codes.md)
-26. [ADR Index / ADR İndeksi](adr/README.md)
+26. [25 - System Topology / Sistem Topolojisi](25-topology.md)
+27. [ADR Index / ADR İndeksi](adr/README.md)
 
 ### Yeni geliştirici için okuma sırası
 1. `00-master-specification.md` — proje scope ve invariant'lar.
 2. `01-technical-analysis.md` — functional/non-functional analiz.
 3. `02-architecture.md` — katmanlar, runtime topology ve trust boundary'ler.
-4. `17-ai-architecture-decisions.md` — neden bu mimarinin seçildiği.
-5. `04-api-guide.md` — endpoint ve HTTP sözleşmeleri.
-6. `21-happy-path.md` — register, OTP, login, wallet, bank account ve BankDeposit'in gerçek sıralı akışı.
-7. `22-fraud-path.md` — Allow/Review/Deny/fail-closed fraud dalları.
-8. `23-fail-path.md` — auth, bank, fraud, idempotency ve notification failure/recovery davranışları.
-9. `24-error-codes.md` — Gateway, FinWallet, provider ve background machine code kataloğu.
-10. `07-database.md` ve `08-financial-flows.md` — persistence ve accounting.
-11. `09-security.md` ve `15-gateway-platform-security.md` — güvenlik modeli.
-12. `10-testing.md` — mock ve gerçek altyapı test ayrımı.
-13. `20-docker-runbook.md` — tüm servisleri Docker ile build/start/stop/debug etme, volume ve backup yönetimi.
-14. `18-performance-review.md` ve `19-final-technical-review.md` — tuning ve final teknik durum.
+4. `25-topology.md` — servis, veri, güvenlik, provider, worker ve Docker topolojisinin tek görünümü.
+5. `17-ai-architecture-decisions.md` — neden bu mimarinin seçildiği.
+6. `04-api-guide.md` — endpoint ve HTTP sözleşmeleri.
+7. `21-happy-path.md` — register, OTP, login, wallet, bank account ve BankDeposit'in gerçek sıralı akışı.
+8. `22-fraud-path.md` — Allow/Review/Deny/fail-closed fraud dalları.
+9. `23-fail-path.md` — auth, bank, fraud, idempotency ve notification failure/recovery davranışları.
+10. `24-error-codes.md` — Gateway, FinWallet, provider ve background machine code kataloğu.
+11. `07-database.md` ve `08-financial-flows.md` — persistence ve accounting.
+12. `09-security.md` ve `15-gateway-platform-security.md` — güvenlik modeli.
+13. `10-testing.md` — mock ve gerçek altyapı test ayrımı.
+14. `20-docker-runbook.md` — tüm servisleri Docker ile build/start/stop/debug etme, volume ve backup yönetimi.
+15. `18-performance-review.md` ve `19-final-technical-review.md` — tuning ve final teknik durum.
 
 ### Güncel runtime topolojisi
 ```text
 Client -> FinWallet.Gateway -> FinWallet.Api
 FinWallet.Api -> FinWallet.Gateway /providers/* -> Fake provider APIs
+FinWallet.Api -> MSSQL / Redis
 ```
 
 Gateway edge auth/routing/traffic control sağlar. FinWallet.Api ve provider servisleri kendi güvenlik kontrollerini korur. MSSQL financial source of truth'tür; Redis transient support state içindir.
@@ -89,28 +92,31 @@ Bir feature tamamlanmış sayılmadan önce etkilenen API, database, security, i
 23. [22 - Fraud Path](22-fraud-path.md)
 24. [23 - Fail Path](23-fail-path.md)
 25. [24 - Error Codes](24-error-codes.md)
-26. [ADR Index](adr/README.md)
+26. [25 - System Topology](25-topology.md)
+27. [ADR Index](adr/README.md)
 
 ### Recommended reading order for a new engineer
 1. `00-master-specification.md` — project scope and invariants.
 2. `01-technical-analysis.md` — functional and non-functional analysis.
 3. `02-architecture.md` — layers, runtime topology and trust boundaries.
-4. `17-ai-architecture-decisions.md` — why the architecture evolved this way.
-5. `04-api-guide.md` — endpoint and HTTP contracts.
-6. `21-happy-path.md` — actual ordered register, OTP, login, wallet, bank-account and BankDeposit flow.
-7. `22-fraud-path.md` — Allow/Review/Deny/fail-closed fraud branches.
-8. `23-fail-path.md` — auth, bank, fraud, idempotency and notification failure/recovery behavior.
-9. `24-error-codes.md` — Gateway, FinWallet, provider and background machine-code catalog.
-10. `07-database.md` and `08-financial-flows.md` — persistence and accounting.
-11. `09-security.md` and `15-gateway-platform-security.md` — security model.
-12. `10-testing.md` — mocks versus real-infrastructure tests.
-13. `20-docker-runbook.md` — build/start/stop/debug the complete Docker stack and manage volumes/backups.
-14. `18-performance-review.md` and `19-final-technical-review.md` — tuning and final technical status.
+4. `25-topology.md` — one combined view of service, data, security, provider, worker and Docker topology.
+5. `17-ai-architecture-decisions.md` — why the architecture evolved this way.
+6. `04-api-guide.md` — endpoint and HTTP contracts.
+7. `21-happy-path.md` — actual ordered register, OTP, login, wallet, bank-account and BankDeposit flow.
+8. `22-fraud-path.md` — Allow/Review/Deny/fail-closed fraud branches.
+9. `23-fail-path.md` — auth, bank, fraud, idempotency and notification failure/recovery behavior.
+10. `24-error-codes.md` — Gateway, FinWallet, provider and background machine-code catalog.
+11. `07-database.md` and `08-financial-flows.md` — persistence and accounting.
+12. `09-security.md` and `15-gateway-platform-security.md` — security model.
+13. `10-testing.md` — mocks versus real-infrastructure tests.
+14. `20-docker-runbook.md` — build/start/stop/debug the complete Docker stack and manage volumes/backups.
+15. `18-performance-review.md` and `19-final-technical-review.md` — tuning and final technical status.
 
 ### Current runtime topology
 ```text
 Client -> FinWallet.Gateway -> FinWallet.Api
 FinWallet.Api -> FinWallet.Gateway /providers/* -> Fake provider APIs
+FinWallet.Api -> MSSQL / Redis
 ```
 
 The Gateway owns edge authentication, routing and traffic control. FinWallet.Api and provider services retain their own security checks. MSSQL is the financial source of truth; Redis is transient support state.
