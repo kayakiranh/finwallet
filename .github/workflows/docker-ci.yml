@@ -100,7 +100,7 @@ jobs:
           docker compose --env-file .env -f compose.yml exec -T mssql bash -lc '
             SQLCMD=$(command -v /opt/mssql-tools18/bin/sqlcmd || command -v /opt/mssql-tools/bin/sqlcmd) &&
             "$SQLCMD" -S localhost -U sa -P "$MSSQL_SA_PASSWORD" -C -b -d FinWallet \
-              -Q "SET NOCOUNT ON; IF (SELECT COUNT(1) FROM dbo.SchemaVersions WHERE Version IN (''001'',''002'',''003'')) <> 3 THROW 50001, ''Schema versions missing'', 1; SELECT Version FROM dbo.SchemaVersions ORDER BY Version;"
+              -Q "SET NOCOUNT ON; IF (SELECT COUNT(1) FROM dbo.SchemaVersions WHERE Version IN (''001'',''002'',''003'',''004'')) <> 4 THROW 50001, ''Schema versions missing'', 1; IF OBJECT_ID(N''dbo.OutboxMessages'', N''U'') IS NULL THROW 50002, ''Outbox schema missing'', 1; IF OBJECT_ID(N''dbo.ReconciliationIssues'', N''U'') IS NULL THROW 50003, ''Reconciliation schema missing'', 1; SELECT Version FROM dbo.SchemaVersions ORDER BY Version;"
           '
 
       - name: Verify Redis authentication and persistence configuration

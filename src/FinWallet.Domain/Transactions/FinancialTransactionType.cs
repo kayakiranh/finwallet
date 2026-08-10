@@ -19,5 +19,8 @@ public enum FinancialTransactionType
     Refund = 4,
 
     /// <summary>TR: Önceki ledger etkisini ters kayıtla düzelten reversal işlemini temsil eder. EN: Represents a reversal transaction correcting a previous ledger effect with opposite entries.</summary>
-    Reversal = 5
+    Reversal = 5,
+
+    /// <summary>TR: Merchant'a yapılan ve opsiyonel kampanya accounting'i içeren alışverişi temsil eder. EN: Represents a merchant purchase with optional campaign accounting.</summary>
+    Purchase = 6
 }
