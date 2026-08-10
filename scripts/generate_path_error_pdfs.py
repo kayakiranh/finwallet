@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate TR/EN PDFs for the dedicated path and error-code documents."""
+"""Generate TR/EN PDFs for dedicated path, error-code and topology documents."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ SOURCES = (
     "22-fraud-path.md",
     "23-fail-path.md",
     "24-error-codes.md",
+    "25-topology.md",
 )
 
 
@@ -48,7 +49,7 @@ def main() -> None:
         base.build_pdf(en_title, en_body, EN_OUT / f"EN_{source.stem}.pdf")
         generated += 2
 
-    print(f"Generated {generated} path/error PDFs.")
+    print(f"Generated {generated} path/error/topology PDFs.")
 
 
 if __name__ == "__main__":
