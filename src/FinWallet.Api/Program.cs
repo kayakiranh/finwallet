@@ -1,11 +1,16 @@
 using System.Net;
 using System.Text;
+using FinWallet.Api.BackgroundJobs;
 using FinWallet.Api.Configuration;
 using FinWallet.Api.Errors;
 using FinWallet.Application.Authentication;
 using FinWallet.Application.Banking;
+using FinWallet.Application.Campaigns;
 using FinWallet.Application.Communication;
+using FinWallet.Application.Corrections;
+using FinWallet.Application.Cutoff;
 using FinWallet.Application.Fraud;
+using FinWallet.Application.Purchases;
 using FinWallet.Application.Registration;
 using FinWallet.Application.Transfers;
 using FinWallet.Application.Wallets;
@@ -14,7 +19,9 @@ using FinWallet.Domain.Fraud.Rules;
 using FinWallet.Domain.Registration;
 using FinWallet.Infrastructure.Authentication;
 using FinWallet.Infrastructure.Banking;
+using FinWallet.Infrastructure.Campaigns;
 using FinWallet.Infrastructure.Communication;
+using FinWallet.Infrastructure.Cutoff;
 using FinWallet.Infrastructure.Fraud;
 using FinWallet.Infrastructure.Persistence.Redis;
 using FinWallet.Infrastructure.Persistence.SqlServer;
@@ -25,6 +32,14 @@ using Microsoft.IdentityModel.Tokens;
 using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Logging.ClearProviders();
+builder.Logging.AddJsonConsole(options =>
+{
+    options.IncludeScopes = true;
+    options.TimestampFormat = "yyyy-MM-ddTHH:mm:ss.fffZ";
+    options.UseUtcTimestamp = true;
+});
 
 builder.AddFinWalletWebPlatform("FinWallet.Api");
 
@@ -46,6 +61,12 @@ var fakeFraudBaseUri = IntegrationUriFactory.CreateRequiredBaseUri(
 var fakeBankBaseUri = IntegrationUriFactory.CreateRequiredBaseUri(
     GetRequired(builder.Configuration, "FinWallet:Integrations:FakeBank:BaseUrl"),
     "FinWallet:Integrations:FakeBank:BaseUrl");
+var fakeCutoffBaseUri = IntegrationUriFactory.CreateRequiredBaseUri(
+    GetRequired(builder.Configuration, "FinWallet:Integrations:FakeCutoff:BaseUrl"),
+    "FinWallet:Integrations:FakeCutoff:BaseUrl");
+var fakeCampaignBaseUri = IntegrationUriFactory.CreateRequiredBaseUri(
+    GetRequired(builder.Configuration, "FinWallet:Integrations:FakeCampaign:BaseUrl"),
+    "FinWallet:Integrations:FakeCampaign:BaseUrl");
 
 var sqlSettings = new SqlServerSettings(sqlConnectionString);
 var otpSecuritySettings = new RegistrationOtpSecuritySettings(registrationOtpPepper);
@@ -64,6 +85,9 @@ builder.Services.AddScoped<IBankAccountStore, SqlBankAccountStore>();
 builder.Services.AddScoped<IWalletTransferPostingStore, SqlWalletTransferPostingStore>();
 builder.Services.AddScoped<IWalletTransferReplayStore, SqlWalletTransferReplayStore>();
 builder.Services.AddScoped<IWalletTransferRiskSignalStore, SqlWalletTransferRiskSignalStore>();
+builder.Services.AddScoped<IBankMoneyMovementStore, SqlBankMoneyMovementStore>();
+builder.Services.AddScoped<IPurchaseStore, SqlPurchaseStore>();
+builder.Services.AddScoped<ITransactionCorrectionStore, SqlTransactionCorrectionStore>();
 
 builder.Services.AddSingleton(otpSecuritySettings);
 builder.Services.AddSingleton<IConnectionMultiplexer>(_ =>
@@ -96,10 +120,17 @@ builder.Services.AddScoped<RegisterCustomerHandler>();
 builder.Services.AddScoped<VerifyRegistrationOtpHandler>();
 builder.Services.AddScoped<LoginCustomerHandler>();
 builder.Services.AddScoped<RefreshSessionHandler>();
+builder.Services.AddScoped<LogoutSessionHandler>();
 builder.Services.AddScoped<CreateWalletHandler>();
 builder.Services.AddScoped<ListWalletsHandler>();
 builder.Services.AddScoped<OpenBankAccountHandler>();
 builder.Services.AddScoped<ExecuteWalletTransferHandler>();
+builder.Services.AddScoped<BankMoneyMovementProcessor>();
+builder.Services.AddScoped<ExecuteBankDepositHandler>();
+builder.Services.AddScoped<ExecuteBankWithdrawalHandler>();
+builder.Services.AddScoped<ExecutePurchaseHandler>();
+builder.Services.AddScoped<ExecuteTransactionCorrectionHandler>();
+builder.Services.AddHostedService<BankMoneyMovementBackgroundService>();
 
 builder.Services.AddTransient<InternalServiceHeaderHandler>();
 
@@ -130,6 +161,24 @@ builder.Services
     {
         client.BaseAddress = fakeBankBaseUri;
         client.Timeout = TimeSpan.FromSeconds(ReadBoundedInt(builder.Configuration, "FinWallet:Integrations:FakeBank:TimeoutSeconds", 3, 1, 60));
+    })
+    .ConfigurePrimaryHttpMessageHandler(CreatePrimaryHandler)
+    .AddHttpMessageHandler<InternalServiceHeaderHandler>();
+
+builder.Services
+    .AddHttpClient<ICutoffProvider, FakeCutoffProvider>(client =>
+    {
+        client.BaseAddress = fakeCutoffBaseUri;
+        client.Timeout = TimeSpan.FromSeconds(ReadBoundedInt(builder.Configuration, "FinWallet:Integrations:FakeCutoff:TimeoutSeconds", 3, 1, 30));
+    })
+    .ConfigurePrimaryHttpMessageHandler(CreatePrimaryHandler)
+    .AddHttpMessageHandler<InternalServiceHeaderHandler>();
+
+builder.Services
+    .AddHttpClient<ICampaignProvider, FakeCampaignProvider>(client =>
+    {
+        client.BaseAddress = fakeCampaignBaseUri;
+        client.Timeout = TimeSpan.FromSeconds(ReadBoundedInt(builder.Configuration, "FinWallet:Integrations:FakeCampaign:TimeoutSeconds", 3, 1, 30));
     })
     .ConfigurePrimaryHttpMessageHandler(CreatePrimaryHandler)
     .AddHttpMessageHandler<InternalServiceHeaderHandler>();
