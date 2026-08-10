@@ -1,5 +1,9 @@
 using FinWallet.Application.Authentication;
 using FinWallet.Application.Banking;
+using FinWallet.Application.Campaigns;
+using FinWallet.Application.Corrections;
+using FinWallet.Application.Cutoff;
+using FinWallet.Application.Purchases;
 using FinWallet.Application.Registration;
 using FinWallet.Application.Transfers;
 using FinWallet.Application.Wallets;
@@ -63,6 +67,15 @@ public sealed class ApiExceptionHandler : IExceptionHandler
             WalletConcurrencyException => new(StatusCodes.Status409Conflict, "WALLET_CONFLICT", "The wallet state changed concurrently. Retry the operation."),
             BankAccountWalletNotFoundException => new(StatusCodes.Status404NotFound, "WALLET_NOT_FOUND", "The wallet was not found."),
             BankAccountConcurrencyException => new(StatusCodes.Status409Conflict, "BANK_ACCOUNT_CONFLICT", "The bank account state changed concurrently. Retry the operation."),
+            BankMoneyMovementAccountUnavailableException => new(StatusCodes.Status404NotFound, "BANK_ACCOUNT_UNAVAILABLE", "The bank account is not available for this operation."),
+            BankMoneyMovementIdempotencyConflictException => new(StatusCodes.Status409Conflict, "IDEMPOTENCY_CONFLICT", "The Idempotency-Key was already used with a different bank movement request."),
+            PurchaseUnavailableException => new(StatusCodes.Status409Conflict, "PURCHASE_UNAVAILABLE", "The wallet or merchant is not available for purchase."),
+            PurchaseIdempotencyConflictException => new(StatusCodes.Status409Conflict, "IDEMPOTENCY_CONFLICT", "The Idempotency-Key was already used with a different purchase request."),
+            CorrectionTransactionNotFoundException => new(StatusCodes.Status404NotFound, "TRANSACTION_NOT_FOUND", "The original financial transaction was not found."),
+            CorrectionNotAllowedException => new(StatusCodes.Status409Conflict, "CORRECTION_NOT_ALLOWED", "The requested correction is not allowed for the original transaction state or type."),
+            CorrectionIdempotencyConflictException => new(StatusCodes.Status409Conflict, "IDEMPOTENCY_CONFLICT", "The Idempotency-Key was already used with a different correction request."),
+            CutoffProviderException providerException => new(StatusCodes.Status503ServiceUnavailable, providerException.Code, providerException.Message),
+            CampaignProviderException providerException => new(StatusCodes.Status503ServiceUnavailable, providerException.Code, providerException.Message),
             ExternalBankProviderException providerException when providerException.IsRetryable => new(StatusCodes.Status503ServiceUnavailable, providerException.Code, providerException.Message),
             ExternalBankProviderException providerException => new(StatusCodes.Status502BadGateway, providerException.Code, providerException.Message),
             ArgumentException => new(StatusCodes.Status400BadRequest, "INVALID_REQUEST", "One or more request values are invalid."),
