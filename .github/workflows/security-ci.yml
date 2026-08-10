@@ -1,0 +1,151 @@
+name: FinWallet Security CI
+
+on:
+  push:
+    branches:
+      - main
+      - 'agent/**'
+    paths:
+      - '**/*.csproj'
+      - 'Directory.Packages.props'
+      - 'Directory.Build.props'
+      - 'FinWallet.sln'
+      - 'compose.yml'
+      - 'compose.production.yml'
+      - '.env.example'
+      - '.github/workflows/security-ci.yml'
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-audit:
+    name: NuGet vulnerability audit and deterministic SBOM
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '8.0.x'
+          dotnet-quality: 'ga'
+
+      - name: Restore solution
+        run: dotnet restore FinWallet.sln
+
+      - name: Fail on known vulnerable direct or transitive NuGet packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet list FinWallet.sln package --vulnerable --include-transitive | tee vulnerable-packages.txt
+          if grep -Eqi 'has the following vulnerable packages|[[:space:]](Critical|High|Moderate|Low)[[:space:]]' vulnerable-packages.txt; then
+            echo 'Known vulnerable NuGet package detected.' >&2
+            exit 1
+          fi
+
+      - name: Export dependency graph as JSON
+        run: dotnet list FinWallet.sln package --include-transitive --format json > dependency-graph.json
+
+      - name: Generate lightweight CycloneDX-compatible SBOM without adding runtime packages
+        shell: python
+        run: |
+          import json
+          from pathlib import Path
+
+          graph = json.loads(Path('dependency-graph.json').read_text(encoding='utf-8'))
+          components = {}
+          for project in graph.get('projects', []):
+              for framework in project.get('frameworks', []):
+                  for package in framework.get('topLevelPackages', []) + framework.get('transitivePackages', []):
+                      name = package.get('id')
+                      version = package.get('resolvedVersion') or package.get('requestedVersion')
+                      if not name or not version:
+                          continue
+                      key = (name.lower(), version)
+                      components[key] = {
+                          'type': 'library',
+                          'name': name,
+                          'version': version,
+                          'purl': f'pkg:nuget/{name}@{version}'
+                      }
+
+          bom = {
+              'bomFormat': 'CycloneDX',
+              'specVersion': '1.5',
+              'version': 1,
+              'metadata': {
+                  'component': {
+                      'type': 'application',
+                      'name': 'FinWallet',
+                      'version': '1.0.0'
+                  }
+              },
+              'components': sorted(components.values(), key=lambda item: (item['name'].lower(), item['version']))
+          }
+          Path('artifacts').mkdir(exist_ok=True)
+          Path('artifacts/finwallet-sbom.cdx.json').write_text(json.dumps(bom, indent=2), encoding='utf-8')
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v6
+        with:
+          name: finwallet-sbom
+          path: artifacts/finwallet-sbom.cdx.json
+          if-no-files-found: error
+
+  production-compose-policy:
+    name: Validate production container exposure and hardening policy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Create CI environment file
+        run: cp .env.example .env
+
+      - name: Render production Compose model
+        run: docker compose --env-file .env -f compose.yml -f compose.production.yml config --format json > production-compose.json
+
+      - name: Enforce production exposure policy
+        shell: python
+        run: |
+          import json
+          from pathlib import Path
+
+          model = json.loads(Path('production-compose.json').read_text(encoding='utf-8'))
+          services = model.get('services', {})
+          errors = []
+
+          for name, service in services.items():
+              ports = service.get('ports') or []
+              if name != 'gateway' and ports:
+                  errors.append(f'{name}: only gateway may publish host ports in production')
+
+              if service.get('privileged') is True:
+                  errors.append(f'{name}: privileged containers are forbidden')
+              if service.get('network_mode') == 'host':
+                  errors.append(f'{name}: host networking is forbidden')
+              if service.get('cap_add'):
+                  errors.append(f'{name}: cap_add is forbidden')
+
+              security_opt = service.get('security_opt') or []
+              if name not in {'mssql', 'mssql-init', 'redis'} and not any('no-new-privileges' in str(item) for item in security_opt):
+                  errors.append(f'{name}: no-new-privileges must remain enabled')
+
+              if name in {'finwallet-api', 'fake-bank', 'fake-fraud', 'fake-cutoff', 'fake-campaign', 'fake-communication', 'gateway'}:
+                  env = service.get('environment') or {}
+                  swagger = str(env.get('Platform__Swagger__Enabled', '')).lower()
+                  if swagger != 'false':
+                      errors.append(f'{name}: Swagger must be disabled in production overlay')
+
+          gateway = services.get('gateway', {})
+          if not gateway.get('ports'):
+              errors.append('gateway: one public host-port mapping is required')
+
+          if errors:
+              raise SystemExit('\n'.join(errors))
+          print('Production Compose exposure/hardening policy passed.')
