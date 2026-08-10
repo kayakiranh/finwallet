@@ -2,141 +2,160 @@
 
 ## Türkçe
 
-### İnceleme özeti
-Bu belge, Gateway/security/platform merge'lerinden sonraki mevcut `main` mimarisini değerlendirir. Son tam solution CI doğrulamasında restore, Release build (`--warnaserror`) ve `dotnet test` başarılı olmuştur. Bu, derleme ve mevcut unit-test kapsamının yeşil olduğunu gösterir; gerçek altyapı concurrency testlerinin tamamlandığı anlamına gelmez.
+### İnceleme sonucu
+FinWallet v1 için planlanan uygulama seviyesindeki ana finansal ve operasyonel boşluklar kapatılmıştır. Proje artık yalnız wallet-transfer demonstrasyonu değildir; public funding/withdrawal, purchase/campaign, refund/reversal, durable fraud review, Outbox/Inbox, transaction history ve reconciliation akışları vardır.
 
-### Güçlü taraflar
-- Finansal source of truth MSSQL'dir; Redis para doğruluğunun kaynağı değildir.
-- Wallet transfer balance/idempotency/transaction/ledger state'ini tek SQL transaction içinde commit eder.
-- Double-entry `Debit = Credit` hem Domain hem persisted SQL seviyesinde kontrol edilir.
-- Durable idempotency duplicate money movement'i engeller.
-- External HTTP finansal SQL transaction dışında çalışır.
-- Fraud risk sinyalleri client'tan değil server state'ten türetilir.
-- JWT + durable session yaklaşımı high-risk işlemlerde revoke kontrolü sağlar.
-- YARP Gateway public auth, internal routing, rate limit, health ve load balancing sınırı oluşturur.
-- Backend/provider business endpointleri downstream service credential ile direct-bypass'a karşı korunur.
-- Swagger tüm Web API'lerde standarttır ve production'da varsayılan kapalıdır.
-- Merkezi package management ve warnings-as-errors kullanılır.
-- xUnit v3 + Moq altyapısı vardır ve CI test çalıştırır.
+### Tamamlanan kritik alanlar
+- MSSQL finansal source of truth; Redis transient support state.
+- Customer registration, OTP, JWT, refresh rotation, logout ve durable session.
+- Multi-currency wallet ve external BankAccount.
+- Bank -> Wallet deposit.
+- Wallet -> Bank withdrawal + cutoff scheduling + blocked-fund lifecycle.
+- Wallet-to-wallet transfer.
+- Merchant purchase + campaign sponsor accounting.
+- Purchase refund ve internal wallet-transfer reversal.
+- Internal + external fraud ve durable FraudEvents/manual review.
+- Append-only double-entry ledger.
+- Durable idempotency ve MSSQL concurrency/locking.
+- Transactional Outbox dispatcher ve Inbox callback dedupe.
+- Customer transaction-history keyset read model.
+- Wallet/Ledger, BankSettlement/Ledger ve FinWallet/FakeBank reconciliation.
+- YARP Gateway auth, internal-service routing, rate limit, health, load balancing ve request limits.
+- Tüm Web API'lerde Swagger; production overlay'de kapalı.
+- Dockerized MSSQL/Redis/provider/gateway stack.
+- Unit tests + Docker stack smoke/schema/Redis kontrolleri.
+- Direct/transitive NuGet vulnerability audit ve SBOM artifact CI.
+- Production Compose exposure policy: yalnız Gateway host port publish edebilir; privileged/host-network/cap-add yasaktır.
 
-### Önceki isteğin karşılanma durumu
-- YARP Gateway: **tamamlandı**.
-- Servis trafiğinin Gateway üzerinden geçirilmesi: **uygulandı**; FinWallet provider adapterları `/providers/*` kullanır.
-- Gateway JWT enforcement: **tamamlandı**.
-- Load balancing / health / rate limit / request limits: **tamamlandı**.
-- Tüm API'lere Swagger: **tamamlandı**.
-- OWASP/API abuse hardening: **uygulama seviyesinde tamamlandı**; volumetric DDoS için edge/ingress/WAF koruması deployment sorumluluğudur.
-- MSSQL/Redis/HttpClient/YARP performance review: **tamamlandı**.
-- Parametrik operasyon/tuning değerlerinin appsettings'e taşınması: **tamamlandı**.
-- Unit test mock kontrolü: önce eksikti; **xUnit + Moq eklendi**.
-- Register'dan transfera happy-path dokümanı: **tamamlandı**, fakat public funding eksikliği açıkça belirtilmiştir.
-- AI mimari karar anlatımı: **tamamlandı**.
-- Tüm maintained proje dokümanlarının TR+EN olması: **tamamlandı**.
+### Finansal correctness değerlendirmesi
+Aşağıdaki kurallar implementation'ın merkezindedir:
+1. External HTTP açık financial SQL transaction içinde yapılmaz.
+2. Completed money movement balanced ledger journal üretir.
+3. Wallet balance projection'dır; ledger/history ayrı tutulur.
+4. Withdrawal provider tamamlanana kadar fon bloklanabilir; terminal failure'da blok serbest bırakılır.
+5. Duplicate command durable idempotency ile tek financial effect üretir.
+6. Callback duplicate'ları Inbox ile dedupe edilir; terminal movement finalization replay-safe'dir.
+7. Correction geçmiş kaydı overwrite etmez; refund/reversal opposite journal üretir.
+8. Reconciliation fark gördüğünde otomatik balance overwrite yapmaz; issue oluşturur.
 
-### Bilinçli olarak appsettings'e taşınmayan değerler
-Kullanıcının “parametrik tüm elementler” talebi operasyonel/tuning değerleri için uygulanmıştır. Aşağıdaki değerler bilinçli olarak runtime switch değildir:
-- JWT imza algoritması;
-- PBKDF2 V1 scheme/work factor migration semantics;
-- double-entry eşitliği;
-- financial decimal invariants;
-- durable idempotency semantics;
-- transaction/locking correctness rules.
+### Fraud değerlendirmesi
+Transfer ve Purchase fraud sinyalleri client trust flag'lerinden alınmaz. Session, country, device reference, velocity, 24h amount ve beneficiary/merchant familiarity server-side state'ten türetilir. Internal ve external kararlar birleşir. `Review` kararı durable FraudEvent olarak kalır; internal approve sonrası aynı idempotency key ile işlem devam edebilir, deny sonrası para hareketi yapılmaz.
 
-Bu değerlerin config ile serbestçe değiştirilmesi güvenlik veya mevcut verinin doğrulanabilirliğini bozabilir.
+### Reliability değerlendirmesi
+- Outbox: financial commit ile aynı MSSQL transaction içinde notification intent yazılır; provider outage finansal commit'i geri almaz.
+- Inbox: callback Source+MessageId+payload hash ile durable dedupe edilir.
+- Bank background processor: scheduled/pending banka hareketlerini tekrar işler.
+- Retryable provider failure pending kalabilir; non-retryable failure terminal Failed olup blocked funds release eder.
+- Redis outage finansal source-of-truth'u bozmaz; OTP gibi güvenlik akışları fail-closed olabilir.
 
-### Açık teknik borçlar
-1. Public BankDeposit ve BankWithdrawal.
-2. Durable FraudEvents/manual review.
-3. Outbox/Inbox ve güvenilir post-commit notification.
-4. ReconciliationRuns/ReconciliationIssues.
-5. Transaction-history/read model.
-6. Centralized masked structured logging + OpenTelemetry/alerting.
-7. Gerçek MSSQL/Redis/YARP integration ve concurrency test suite.
-8. Logout/session-revoke public endpoint.
-9. Dependency vulnerability/SBOM pipeline.
-10. Production ingress/WAF/network-policy/TLS deployment hardening.
+### Security değerlendirmesi
+Application seviyesinde OWASP/API abuse karşı önlemler vardır: JWT, durable sessions, BOLA/ownership, parameterized SQL, rate/body/header limits, JSON write policy, CORS allow-list, security headers, service-to-service keys, secret fail-fast, sensitive logging yasakları ve provider URL'lerinin server-owned config olması.
 
-### Öncelik önerisi
-En mantıklı sıra:
-1. BankDeposit;
-2. BankWithdrawal + cutoff;
-3. integration/concurrency tests;
-4. Outbox/Inbox + notification;
-5. FraudEvents/manual review;
-6. transaction history;
-7. reconciliation;
-8. telemetry/operations hardening.
+Production deployment sınırında hâlâ dış altyapı sorumlulukları vardır: TLS ingress, WAF/DDoS, NetworkPolicy/firewall, managed secret store, certificate/key rotation, image signing/digest pinning, SIEM/APM, backup restore tatbikatı ve operasyonel approval/audit süreçleri. Bunlar repo içi application code ile tamamen çözülemez.
+
+### Test değerlendirmesi
+Unit-test katmanı xUnit v3 + Moq kullanır. Mock testleri orchestration boundary'lerini doğrular; MSSQL locking, Redis ve YARP davranışının yerine geçmez. CI ayrıca Docker Compose modelini doğrular, tüm service image'larını build eder, stack'i ayağa kaldırır, Gateway health, MSSQL schema ve Redis auth/persistence kontrollerini çalıştırır. Security CI direct+transitive NuGet vulnerability audit ve production exposure policy uygular.
+
+### Dependency ve supply-chain
+- NuGet sürümleri merkezi yönetilir.
+- Release build warnings-as-errors çalışır.
+- CI direct+transitive vulnerability kontrolü yapar.
+- Dependency graph'tan CycloneDX-compatible SBOM artifact üretilir.
+- Runtime'a yalnız SBOM için yeni package eklenmez.
+
+### Bilinçli olarak kapsam dışında kalanlar
+- gerçek banka/SMS/fraud provider credential ve SLA'ları;
+- kart/acquiring;
+- kredi/loan/credit scoring;
+- crypto/stocks;
+- FX engine;
+- Kafka/RabbitMQ;
+- core microservice split;
+- Event Sourcing;
+- production Kubernetes/OpenShift manifest/NetworkPolicy/Ingress/WAF platform yönetimi.
 
 ### Son karar
-Mevcut sistem side-project amacı için sağlam bir financial-core/gateway baseline'ıdır. “Production-ready banking platform” olarak değerlendirilmemelidir; funding/withdrawal, reconciliation, observability ve gerçek altyapı concurrency testleri tamamlanmadan bu iddia doğru olmaz.
+**FinWallet v1 side-project scope'u tamamlanmıştır.** Kod tarafında bilinen ana functional boşluk kalmamıştır. Proje finansal backend mimarisi, correctness, concurrency, fraud, gateway, reliability ve reconciliation prensiplerini gösterecek seviyededir.
+
+Bu ifade “regüle banka production platformudur” anlamına gelmez. Gerçek production için dış deployment/security/operations kontrolleri ve bağımsız penetration/performance/DR testleri ayrıca gerekir.
 
 ---
 
 ## English
 
-### Review summary
-This document evaluates the current `main` architecture after the Gateway/security/platform merges. The latest full-solution CI validation completed restore, Release build with `--warnaserror`, and `dotnet test` successfully. This proves compilation and the current unit-test scope are green; it does not mean real-infrastructure concurrency testing is complete.
+### Review outcome
+The major application-level financial and operational gaps planned for FinWallet v1 are now closed. The project is no longer only a wallet-transfer demonstration; it includes public funding/withdrawal, purchase/campaign, refund/reversal, durable fraud review, Outbox/Inbox, transaction history and reconciliation flows.
 
-### Strengths
-- MSSQL is the financial source of truth; Redis is not an authority for money correctness.
-- Wallet transfer commits balances, idempotency, transaction and ledger state in one SQL transaction.
-- Double-entry `Debit = Credit` is validated both in Domain and persisted SQL.
-- Durable idempotency prevents duplicate money movement.
-- External HTTP runs outside the financial SQL transaction.
-- Fraud risk signals are derived from server state rather than trusted from the client.
-- JWT plus durable sessions provide revocation checks for high-risk operations.
-- YARP Gateway provides public auth, internal routing, rate limiting, health and load-balancing boundaries.
-- Backend/provider business endpoints require a downstream service credential to reduce direct-bypass risk.
-- Swagger is standardized across all Web APIs and disabled by default in production.
-- Central package management and warnings-as-errors are enabled.
-- xUnit v3 + Moq exist and CI executes tests.
+### Completed critical areas
+- MSSQL as financial source of truth; Redis as transient support state.
+- Customer registration, OTP, JWT, refresh rotation, logout and durable sessions.
+- Multi-currency wallets and external BankAccounts.
+- Bank -> Wallet deposit.
+- Wallet -> Bank withdrawal with cutoff scheduling and blocked-fund lifecycle.
+- Wallet-to-wallet transfer.
+- Merchant purchase plus campaign-sponsor accounting.
+- Purchase refund and internal wallet-transfer reversal.
+- Internal + external fraud with durable FraudEvents/manual review.
+- Append-only double-entry ledger.
+- Durable idempotency and MSSQL concurrency/locking.
+- Transactional Outbox dispatcher and Inbox callback deduplication.
+- Customer transaction-history keyset read model.
+- Wallet/Ledger, BankSettlement/Ledger and FinWallet/FakeBank reconciliation.
+- YARP Gateway authentication, internal-service routing, rate limiting, health, load balancing and request limits.
+- Swagger on all Web APIs, disabled by production overlay.
+- Dockerized MSSQL/Redis/provider/gateway stack.
+- Unit tests plus Docker stack smoke/schema/Redis checks.
+- Direct/transitive NuGet vulnerability audit and SBOM artifact CI.
+- Production Compose exposure policy: only Gateway may publish a host port; privileged/host-network/cap-add are forbidden.
 
-### Status of the previous request
-- YARP Gateway: **completed**.
-- Routing service traffic through Gateway: **implemented**; FinWallet provider adapters use `/providers/*`.
-- Gateway JWT enforcement: **completed**.
-- Load balancing / health / rate limiting / request limits: **completed**.
-- Swagger on all APIs: **completed**.
-- OWASP/API-abuse hardening: **completed at application level**; volumetric DDoS still requires edge/ingress/WAF deployment controls.
-- MSSQL/Redis/HttpClient/YARP performance review: **completed**.
-- Moving operational/tuning parameters into appsettings: **completed**.
-- Unit-test mock verification: previously missing; **xUnit + Moq added**.
-- Registration-to-transfer happy-path document: **completed**, with the public-funding gap documented explicitly.
-- AI architecture decision narrative: **completed**.
-- All maintained project documentation in TR+EN: **completed**.
+### Financial-correctness assessment
+The implementation centers on these rules:
+1. External HTTP never runs inside an open financial SQL transaction.
+2. Completed money movements create balanced ledger journals.
+3. Wallet balance is a projection; ledger/history remain separate.
+4. Withdrawal funds may remain blocked until provider completion; terminal failure releases the reservation.
+5. Duplicate commands produce a single financial effect through durable idempotency.
+6. Duplicate callbacks are deduplicated by Inbox; terminal movement finalization is replay-safe.
+7. Corrections never overwrite history; refund/reversal creates opposite journals.
+8. Reconciliation reports mismatches instead of silently overwriting balances.
 
-### Values intentionally not moved into appsettings
-The request for “all parameterized elements” was applied to operational and tuning values. The following deliberately remain non-runtime-switch invariants:
-- JWT signing algorithm;
-- PBKDF2 V1 scheme/work-factor migration semantics;
-- double-entry equality;
-- financial decimal invariants;
-- durable idempotency semantics;
-- transaction/locking correctness rules.
+### Fraud assessment
+Transfer and Purchase fraud signals are not accepted as client trust flags. Session, country, device reference, velocity, 24-hour amount and beneficiary/merchant familiarity are derived from server-side state. Internal and external decisions are combined. A `Review` result becomes a durable FraudEvent; after internal approval the same idempotency key may resume processing, while denial moves no money.
 
-Making these arbitrary configuration switches could weaken security or make existing persisted data unverifiable.
+### Reliability assessment
+- Outbox writes notification intent in the same MSSQL transaction as the financial commit; communication outage never rolls money back.
+- Inbox durably deduplicates callbacks by Source+MessageId+payload hash.
+- Bank background processor advances scheduled/pending bank movements.
+- Retryable provider failures may remain pending; non-retryable failures become terminal Failed and release blocked funds.
+- Redis outage does not replace financial truth; security flows such as OTP may fail closed.
 
-### Open technical debt
-1. Public BankDeposit and BankWithdrawal.
-2. Durable FraudEvents/manual review.
-3. Outbox/Inbox and reliable post-commit notification.
-4. ReconciliationRuns/ReconciliationIssues.
-5. Transaction-history/read model.
-6. Centralized masked structured logging + OpenTelemetry/alerting.
-7. Real MSSQL/Redis/YARP integration and concurrency test suite.
-8. Public logout/session-revoke endpoint.
-9. Dependency vulnerability/SBOM pipeline.
-10. Production ingress/WAF/network-policy/TLS deployment hardening.
+### Security assessment
+Application-level OWASP/API-abuse controls include JWT, durable sessions, BOLA/ownership checks, parameterized SQL, rate/body/header limits, JSON write policy, CORS allow-list, security headers, service-to-service keys, secret fail-fast behavior, sensitive-log prohibitions and server-owned provider URLs.
 
-### Recommended priority
-1. BankDeposit;
-2. BankWithdrawal + cutoff;
-3. integration/concurrency tests;
-4. Outbox/Inbox + notification;
-5. FraudEvents/manual review;
-6. transaction history;
-7. reconciliation;
-8. telemetry/operations hardening.
+Real production still requires external platform controls: TLS ingress, WAF/DDoS protection, NetworkPolicy/firewall, managed secret store, certificate/key rotation, image signing/digest pinning, SIEM/APM, backup/restore exercises and operational approval/audit processes. These cannot be fully solved by repository application code alone.
 
-### Final assessment
-The current system is a solid financial-core/gateway baseline for a side project. It should not be described as a production-ready banking platform until funding/withdrawal, reconciliation, observability and real-infrastructure concurrency tests are complete.
+### Testing assessment
+The unit-test layer uses xUnit v3 + Moq. Mock tests validate orchestration boundaries but do not replace MSSQL locking, Redis or YARP behavior. CI also validates Docker Compose models, builds all service images, starts the stack, and checks Gateway health, MSSQL schema, Redis authentication/persistence. Security CI performs direct+transitive NuGet vulnerability auditing and production-exposure policy checks.
+
+### Dependency and supply chain
+- NuGet versions are centrally managed.
+- Release build runs with warnings-as-errors.
+- CI audits direct and transitive vulnerabilities.
+- A CycloneDX-compatible SBOM artifact is generated from the dependency graph.
+- No runtime package is added solely for SBOM generation.
+
+### Intentionally out of scope
+- real bank/SMS/fraud provider credentials and SLAs;
+- cards/acquiring;
+- lending/credit scoring;
+- crypto/stocks;
+- FX engine;
+- Kafka/RabbitMQ;
+- core microservice split;
+- Event Sourcing;
+- production Kubernetes/OpenShift manifest/NetworkPolicy/Ingress/WAF platform administration.
+
+### Final decision
+**FinWallet v1 is complete for its side-project scope.** No known major functional application gap remains. The repository is at a level suitable for demonstrating financial-backend architecture, correctness, concurrency, fraud, gateway, reliability and reconciliation principles.
+
+This does not mean it is a regulated bank production platform. Real production still requires external deployment/security/operations controls plus independent penetration, performance and disaster-recovery testing.
