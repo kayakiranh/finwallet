@@ -10,8 +10,12 @@ using FinWallet.Application.Communication;
 using FinWallet.Application.Corrections;
 using FinWallet.Application.Cutoff;
 using FinWallet.Application.Fraud;
+using FinWallet.Application.Inbox;
+using FinWallet.Application.Outbox;
 using FinWallet.Application.Purchases;
+using FinWallet.Application.Reconciliation;
 using FinWallet.Application.Registration;
+using FinWallet.Application.Transactions;
 using FinWallet.Application.Transfers;
 using FinWallet.Application.Wallets;
 using FinWallet.Domain.Fraud;
@@ -78,6 +82,7 @@ builder.Services.AddExceptionHandler<ApiExceptionHandler>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton(sqlSettings);
 builder.Services.AddSingleton<SqlConnectionFactory>();
+
 builder.Services.AddScoped<ICustomerRegistrationStore, SqlCustomerRegistrationStore>();
 builder.Services.AddScoped<IAuthenticationStore, SqlAuthenticationStore>();
 builder.Services.AddScoped<IWalletStore, SqlWalletStore>();
@@ -86,8 +91,16 @@ builder.Services.AddScoped<IWalletTransferPostingStore, SqlWalletTransferPosting
 builder.Services.AddScoped<IWalletTransferReplayStore, SqlWalletTransferReplayStore>();
 builder.Services.AddScoped<IWalletTransferRiskSignalStore, SqlWalletTransferRiskSignalStore>();
 builder.Services.AddScoped<IBankMoneyMovementStore, SqlBankMoneyMovementStore>();
+builder.Services.AddScoped<IBankMoneyMovementFailureStore, SqlBankMoneyMovementFailureStore>();
 builder.Services.AddScoped<IPurchaseStore, SqlPurchaseStore>();
+builder.Services.AddScoped<IPurchaseRiskSignalStore, SqlPurchaseRiskSignalStore>();
 builder.Services.AddScoped<ITransactionCorrectionStore, SqlTransactionCorrectionStore>();
+builder.Services.AddScoped<IFraudEventStore, SqlFraudEventStore>();
+builder.Services.AddScoped<IOutboxStore, SqlOutboxStore>();
+builder.Services.AddScoped<IBankCallbackInboxStore, SqlBankCallbackInboxStore>();
+builder.Services.AddScoped<IReconciliationStore, SqlReconciliationStore>();
+builder.Services.AddScoped<IReconciliationQueryStore, SqlReconciliationQueryStore>();
+builder.Services.AddScoped<ITransactionHistoryStore, SqlTransactionHistoryStore>();
 
 builder.Services.AddSingleton(otpSecuritySettings);
 builder.Services.AddSingleton<IConnectionMultiplexer>(_ =>
@@ -129,8 +142,15 @@ builder.Services.AddScoped<BankMoneyMovementProcessor>();
 builder.Services.AddScoped<ExecuteBankDepositHandler>();
 builder.Services.AddScoped<ExecuteBankWithdrawalHandler>();
 builder.Services.AddScoped<ExecutePurchaseHandler>();
+builder.Services.AddScoped<ExecuteFraudProtectedPurchaseHandler>();
 builder.Services.AddScoped<ExecuteTransactionCorrectionHandler>();
+builder.Services.AddScoped<ProcessBankCallbackHandler>();
+builder.Services.AddScoped<RunReconciliationHandler>();
+builder.Services.AddScoped<GetReconciliationReportHandler>();
+builder.Services.AddScoped<ListTransactionHistoryHandler>();
+
 builder.Services.AddHostedService<BankMoneyMovementBackgroundService>();
+builder.Services.AddHostedService<OutboxDispatchBackgroundService>();
 
 builder.Services.AddTransient<InternalServiceHeaderHandler>();
 
