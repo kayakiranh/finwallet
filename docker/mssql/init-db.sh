@@ -63,5 +63,6 @@ apply_migration() {
 apply_migration "001" "001_authentication_schema.sql"
 apply_migration "002" "002_financial_accounts_schema.sql"
 apply_migration "003" "003_ledger_transaction_schema.sql"
+apply_migration "004" "004_project_completion_schema.sql"
 
 echo "FinWallet database schema is ready."
