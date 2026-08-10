@@ -6,27 +6,29 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace FinWallet.Api.Controllers;
 
-/// <summary>TR: Authenticated customer merchant purchase use-case'ini campaign accounting ve durable idempotency ile public Web API olarak sunar. EN: Exposes authenticated customer merchant-purchase use case with campaign accounting and durable idempotency as public Web API.</summary>
+/// <summary>TR: Authenticated customer merchant purchase use-case'ini durable internal/external fraud, campaign accounting ve idempotency ile public Web API olarak sunar. EN: Exposes authenticated customer merchant-purchase use case with durable internal/external fraud, campaign accounting and idempotency as public Web API.</summary>
 [ApiController]
 [Authorize]
 [Route("api/v1/purchases")]
 public sealed class PurchasesController : ControllerBase
 {
-    private readonly ExecutePurchaseHandler _handler;
+    private readonly ExecuteFraudProtectedPurchaseHandler _handler;
 
-    /// <summary>TR: Purchase use-case handler bağımlılığıyla controller'ı oluşturur. EN: Creates controller with purchase use-case handler dependency.</summary>
-    /// <param name="handler">TR: Campaign + atomic posting orchestrator'ı. EN: Campaign + atomic-posting orchestrator.</param>
-    public PurchasesController(ExecutePurchaseHandler handler) => _handler = handler ?? throw new ArgumentNullException(nameof(handler));
+    /// <summary>TR: Fraud-protected purchase use-case handler bağımlılığıyla controller'ı oluşturur. EN: Creates controller with fraud-protected purchase use-case handler dependency.</summary>
+    /// <param name="handler">TR: Durable fraud + campaign + atomic posting orchestrator'ı. EN: Durable-fraud + campaign + atomic-posting orchestrator.</param>
+    public PurchasesController(ExecuteFraudProtectedPurchaseHandler handler) => _handler = handler ?? throw new ArgumentNullException(nameof(handler));
 
-    /// <summary>TR: Merchant purchase'ı campaign provider ile değerlendirir ve customer/merchant/platform ekonomik etkilerini double-entry ledger'a atomik olarak post eder. EN: Evaluates merchant purchase with campaign provider and atomically posts customer/merchant/platform economic effects to double-entry ledger.</summary>
+    /// <summary>TR: Merchant purchase'ı server-side fraud sinyalleriyle değerlendirir; Allow/Approved sonrasında campaign provider ve double-entry posting çalışır. EN: Evaluates merchant purchase using server-side fraud signals; campaign provider and double-entry posting run only after Allow/Approved.</summary>
     /// <param name="request">TR: Wallet, merchant ve original amount request'i. EN: Wallet, merchant and original-amount request.</param>
     /// <param name="idempotencyKey">TR: Zorunlu durable `Idempotency-Key` header değeri. EN: Required durable `Idempotency-Key` header value.</param>
-    /// <param name="cancellationToken">TR: Campaign HTTP ve MSSQL iptal sinyali. EN: Campaign HTTP and MSSQL cancellation signal.</param>
-    /// <returns>TR: Completed yeni veya replay purchase sonucunu döndürür. EN: Returns completed new or replayed purchase result.</returns>
+    /// <param name="cancellationToken">TR: Fraud/Campaign HTTP ve MSSQL iptal sinyali. EN: Fraud/Campaign HTTP and MSSQL cancellation signal.</param>
+    /// <returns>TR: Completed yeni/replay purchase veya 202 manual-review sonucu döndürür. EN: Returns completed new/replayed purchase or a 202 manual-review result.</returns>
     [HttpPost]
     [ProducesResponseType(typeof(ServiceResult<PurchaseResponse>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ServiceResult<object>), StatusCodes.Status202Accepted)]
     [ProducesResponseType(typeof(ServiceResult<object>), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ServiceResult<object>), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ServiceResult<object>), StatusCodes.Status403Forbidden)]
     [ProducesResponseType(typeof(ServiceResult<object>), StatusCodes.Status409Conflict)]
     [ProducesResponseType(typeof(ServiceResult<object>), StatusCodes.Status503ServiceUnavailable)]
     public async Task<ActionResult<ServiceResult<PurchaseResponse>>> ExecuteAsync(
@@ -34,9 +36,10 @@ public sealed class PurchasesController : ControllerBase
         [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         CancellationToken cancellationToken)
     {
-        if (!Guid.TryParseExact(User.FindFirst("sub")?.Value, "N", out var customerId))
+        if (!Guid.TryParseExact(User.FindFirst("sub")?.Value, "N", out var customerId)
+            || !Guid.TryParseExact(User.FindFirst("sid")?.Value, "N", out var sessionId))
         {
-            return Unauthorized(ServiceResult<PurchaseResponse>.Failure("INVALID_ACCESS_TOKEN", "The access token customer identity is invalid."));
+            return Unauthorized(ServiceResult<PurchaseResponse>.Failure("INVALID_ACCESS_TOKEN", "The access token customer or session identity is invalid."));
         }
         if (string.IsNullOrWhiteSpace(idempotencyKey))
         {
@@ -45,6 +48,7 @@ public sealed class PurchasesController : ControllerBase
 
         var result = await _handler.HandleAsync(
             new PurchaseCommand(customerId, request.WalletId, request.MerchantId, request.Amount, idempotencyKey, HttpContext.TraceIdentifier),
+            sessionId,
             cancellationToken);
         return Ok(ServiceResult<PurchaseResponse>.Success(
             new PurchaseResponse(result),
