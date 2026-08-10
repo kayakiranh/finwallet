@@ -62,9 +62,9 @@ jobs:
           required = [
               'Bu sözlük 314 terim içerir.',
               '### Ledger',
-              '### Double-Entry Ledger',
+              '### Double-Entry Bookkeeping',
               '### Microservices',
-              'This glossary contains 314 terms.',
+              'The glossary contains 314 terms.',
               '## English',
           ]
           for marker in required:
