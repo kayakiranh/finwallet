@@ -7,21 +7,24 @@ namespace FinWallet.Application.Banking;
 public sealed class BankMoneyMovementProcessor
 {
     private readonly IBankMoneyMovementStore _store;
+    private readonly IBankMoneyMovementFailureStore _failureStore;
     private readonly IBankProvider _bankProvider;
     private readonly TimeProvider _timeProvider;
 
-    /// <summary>TR: Persistence, bank provider ve zaman bağımlılıklarıyla processor'ı oluşturur. EN: Creates the processor with persistence, bank-provider and time dependencies.</summary>
+    /// <summary>TR: Persistence, terminal-failure persistence, bank provider ve zaman bağımlılıklarıyla processor'ı oluşturur. EN: Creates the processor with persistence, terminal-failure persistence, bank-provider and time dependencies.</summary>
     /// <param name="store">TR: Durable bank movement store. EN: Durable bank-movement store.</param>
+    /// <param name="failureStore">TR: Non-retryable provider hatasında blocked fund release/terminal state store'u. EN: Store releasing blocked funds and finalizing terminal state on non-retryable provider failure.</param>
     /// <param name="bankProvider">TR: External-bank ACL sınırı. EN: External-bank ACL boundary.</param>
     /// <param name="timeProvider">TR: Due-date kontrolü için UTC zaman kaynağı. EN: UTC time source for due-date checks.</param>
-    public BankMoneyMovementProcessor(IBankMoneyMovementStore store, IBankProvider bankProvider, TimeProvider timeProvider)
+    public BankMoneyMovementProcessor(IBankMoneyMovementStore store, IBankMoneyMovementFailureStore failureStore, IBankProvider bankProvider, TimeProvider timeProvider)
     {
         _store = store ?? throw new ArgumentNullException(nameof(store));
+        _failureStore = failureStore ?? throw new ArgumentNullException(nameof(failureStore));
         _bankProvider = bankProvider ?? throw new ArgumentNullException(nameof(bankProvider));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
     }
 
-    /// <summary>TR: Scheduled işlem zamanı gelmişse provider POST/poll yapar ve provider sonucunu durable financial state'e uygular. EN: Starts/polls the provider when a scheduled operation is due and applies the provider result to durable financial state.</summary>
+    /// <summary>TR: Scheduled işlem zamanı gelmişse provider POST/poll yapar, kalıcı provider hatasında güvenli Failed finalize eder ve normal provider sonucunu durable financial state'e uygular. EN: Starts/polls the provider when a scheduled operation is due, safely finalizes permanent provider failures and applies normal provider results to durable financial state.</summary>
     /// <param name="movement">TR: İşlenecek durable movement snapshot'ı. EN: Durable movement snapshot to process.</param>
     /// <param name="correlationId">TR: Provider'a propagate edilecek correlation kimliği. EN: Correlation identifier propagated to the provider.</param>
     /// <param name="cancellationToken">TR: HTTP/SQL iptal sinyali. EN: HTTP/SQL cancellation signal.</param>
@@ -35,23 +38,30 @@ public sealed class BankMoneyMovementProcessor
         var today = DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
         if (movement.State == BankMoneyMovementState.Scheduled && movement.ProcessingDate > today) return movement;
 
-        ExternalBankTransactionResult providerResult;
-        if (movement.ExternalTransactionId.HasValue)
+        try
         {
-            providerResult = await _bankProvider.GetTransactionAsync(movement.ExternalTransactionId.Value, correlationId, cancellationToken);
-        }
-        else
-        {
-            providerResult = await _bankProvider.StartMoneyMovementAsync(
-                movement.ExternalAccountId,
-                movement.Amount,
-                movement.Type,
-                movement.TransactionId.ToString("N"),
-                correlationId,
-                cancellationToken);
-        }
+            ExternalBankTransactionResult providerResult;
+            if (movement.ExternalTransactionId.HasValue)
+            {
+                providerResult = await _bankProvider.GetTransactionAsync(movement.ExternalTransactionId.Value, correlationId, cancellationToken);
+            }
+            else
+            {
+                providerResult = await _bankProvider.StartMoneyMovementAsync(
+                    movement.ExternalAccountId,
+                    movement.Amount,
+                    movement.Type,
+                    movement.TransactionId.ToString("N"),
+                    correlationId,
+                    cancellationToken);
+            }
 
-        return await _store.ApplyProviderResultAsync(movement.TransactionId, providerResult.TransactionId, providerResult.Status, cancellationToken);
+            return await _store.ApplyProviderResultAsync(movement.TransactionId, providerResult.TransactionId, providerResult.Status, cancellationToken);
+        }
+        catch (ExternalBankProviderException exception) when (!exception.IsRetryable)
+        {
+            return await _failureStore.FailAsync(movement.TransactionId, exception.Code, cancellationToken);
+        }
     }
 }
 
@@ -80,7 +90,7 @@ public sealed class ExecuteBankDepositHandler
     /// <param name="idempotencyKey">TR: Client durable idempotency anahtarı. EN: Client durable-idempotency key.</param>
     /// <param name="correlationId">TR: Correlation kimliği. EN: Correlation identifier.</param>
     /// <param name="cancellationToken">TR: HTTP/SQL iptal sinyali. EN: HTTP/SQL cancellation signal.</param>
-    /// <returns>TR: Completed/Pending durable deposit sonucunu döndürür. EN: Returns Completed/Pending durable deposit result.</returns>
+    /// <returns>TR: Completed/Pending/Failed durable deposit sonucunu döndürür. EN: Returns Completed/Pending/Failed durable deposit result.</returns>
     public async Task<BankMoneyMovementResult> HandleAsync(Guid customerId, Guid bankAccountId, decimal amount, string idempotencyKey, string correlationId, CancellationToken cancellationToken)
     {
         var context = await _store.FindContextAsync(customerId, bankAccountId, cancellationToken) ?? throw new BankMoneyMovementAccountUnavailableException();
@@ -140,7 +150,7 @@ public sealed class ExecuteBankWithdrawalHandler
     /// <param name="idempotencyKey">TR: Client durable idempotency anahtarı. EN: Client durable-idempotency key.</param>
     /// <param name="correlationId">TR: Correlation kimliği. EN: Correlation identifier.</param>
     /// <param name="cancellationToken">TR: Cutoff/HTTP/SQL iptal sinyali. EN: Cutoff/HTTP/SQL cancellation signal.</param>
-    /// <returns>TR: Scheduled/Pending/Completed durable withdrawal sonucunu döndürür. EN: Returns Scheduled/Pending/Completed durable withdrawal result.</returns>
+    /// <returns>TR: Scheduled/Pending/Completed/Failed durable withdrawal sonucunu döndürür. EN: Returns Scheduled/Pending/Completed/Failed durable withdrawal result.</returns>
     public async Task<BankMoneyMovementResult> HandleAsync(Guid customerId, Guid bankAccountId, decimal amount, string idempotencyKey, string correlationId, CancellationToken cancellationToken)
     {
         var context = await _store.FindContextAsync(customerId, bankAccountId, cancellationToken) ?? throw new BankMoneyMovementAccountUnavailableException();
