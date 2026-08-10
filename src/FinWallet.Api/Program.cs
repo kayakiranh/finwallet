@@ -142,6 +142,7 @@ builder.Services.AddScoped<BankMoneyMovementProcessor>();
 builder.Services.AddScoped<ExecuteBankDepositHandler>();
 builder.Services.AddScoped<ExecuteBankWithdrawalHandler>();
 builder.Services.AddScoped<ExecutePurchaseHandler>();
+builder.Services.AddScoped<ExecuteFraudProtectedPurchaseHandler>();
 builder.Services.AddScoped<ExecuteTransactionCorrectionHandler>();
 builder.Services.AddScoped<ProcessBankCallbackHandler>();
 builder.Services.AddScoped<RunReconciliationHandler>();
