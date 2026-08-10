@@ -1,0 +1,111 @@
+name: Generate technical and financial glossary PDFs
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'docs/26-technical-financial-glossary.md'
+      - 'scripts/generate_glossary_pdfs.py'
+      - 'scripts/glossary_payload/**'
+      - 'scripts/generate_docs_pdf.py'
+      - '.github/workflows/generate-glossary-pdfs.yml'
+
+concurrency:
+  group: glossary-pdfs-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  generate-glossary-pdfs:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout pull request branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install PDF dependencies
+        run: python -m pip install --disable-pip-version-check reportlab==4.4.3 pypdf==6.0.0
+
+      - name: Generate glossary source and PDFs
+        run: python scripts/generate_glossary_pdfs.py
+
+      - name: Verify source and PDFs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s docs/26-technical-financial-glossary.md
+          test -s docs/pdf/TR/TR_26-technical-financial-glossary.pdf
+          test -s docs/pdf/EN/EN_26-technical-financial-glossary.pdf
+          python - <<'PY'
+          from pathlib import Path
+          from pypdf import PdfReader
+          import hashlib
+
+          source = Path('docs/26-technical-financial-glossary.md')
+          expected = '0c3b319deeee98a57a942705b6562de323598eac6e5294053c90df68917e8966'
+          actual = hashlib.sha256(source.read_bytes()).hexdigest()
+          if actual != expected:
+              raise SystemExit(f'Unexpected glossary source SHA256: {actual}')
+
+          text = source.read_text(encoding='utf-8')
+          required = [
+              'Bu sözlük 314 terim içerir.',
+              '### Ledger',
+              '### Double-Entry Ledger',
+              '### Microservices',
+              'This glossary contains 314 terms.',
+              '## English',
+          ]
+          for marker in required:
+              if marker not in text:
+                  raise SystemExit(f'Missing glossary marker: {marker}')
+
+          for pdf in [
+              Path('docs/pdf/TR/TR_26-technical-financial-glossary.pdf'),
+              Path('docs/pdf/EN/EN_26-technical-financial-glossary.pdf'),
+          ]:
+              reader = PdfReader(str(pdf))
+              if len(reader.pages) < 20:
+                  raise SystemExit(f'{pdf} is unexpectedly short: {len(reader.pages)} pages')
+              print(f'{pdf}: {len(reader.pages)} pages')
+          PY
+
+      - name: Upload glossary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: technical-financial-glossary-pdfs
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            docs/26-technical-financial-glossary.md
+            docs/pdf/TR/TR_26-technical-financial-glossary.pdf
+            docs/pdf/EN/EN_26-technical-financial-glossary.pdf
+
+      - name: Commit generated source and PDFs
+        shell: bash
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/26-technical-financial-glossary.md \
+                  docs/pdf/TR/TR_26-technical-financial-glossary.pdf \
+                  docs/pdf/EN/EN_26-technical-financial-glossary.pdf
+          if git diff --cached --quiet; then
+            echo "Glossary source and PDFs are already current."
+            exit 0
+          fi
+          git commit -m "docs: generate comprehensive glossary PDF set"
+          git push origin "HEAD:${HEAD_REF}"
