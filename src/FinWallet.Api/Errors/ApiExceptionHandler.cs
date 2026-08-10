@@ -3,6 +3,8 @@ using FinWallet.Application.Banking;
 using FinWallet.Application.Campaigns;
 using FinWallet.Application.Corrections;
 using FinWallet.Application.Cutoff;
+using FinWallet.Application.Fraud;
+using FinWallet.Application.Inbox;
 using FinWallet.Application.Purchases;
 using FinWallet.Application.Registration;
 using FinWallet.Application.Transfers;
@@ -53,6 +55,7 @@ public sealed class ApiExceptionHandler : IExceptionHandler
             InvalidCredentialsException => new(StatusCodes.Status401Unauthorized, "INVALID_CREDENTIALS", "The supplied credentials are invalid."),
             RefreshTokenReuseDetectedException => new(StatusCodes.Status401Unauthorized, "REFRESH_TOKEN_REUSE_DETECTED", "The session was revoked because refresh-token reuse was detected."),
             InvalidRefreshTokenException => new(StatusCodes.Status401Unauthorized, "INVALID_REFRESH_TOKEN", "The refresh token is invalid or no longer usable."),
+
             WalletTransferSessionInvalidException => new(StatusCodes.Status401Unauthorized, "TRANSFER_SESSION_INVALID", "The financial session is invalid or no longer active."),
             WalletTransferFraudDeniedException => new(StatusCodes.Status403Forbidden, "TRANSFER_FRAUD_DENIED", "The transfer was denied by fraud controls."),
             WalletTransferFraudReviewRequiredException => new(StatusCodes.Status202Accepted, "TRANSFER_REVIEW_REQUIRED", "The transfer requires additional review and no money was moved."),
@@ -61,19 +64,33 @@ public sealed class ApiExceptionHandler : IExceptionHandler
             WalletTransferIdempotencyConflictException => new(StatusCodes.Status409Conflict, "IDEMPOTENCY_CONFLICT", "The Idempotency-Key was already used with a different transfer request."),
             WalletTransferInProgressException => new(StatusCodes.Status409Conflict, "TRANSFER_IN_PROGRESS", "An identical transfer request is already in progress."),
             WalletTransferUnavailableException => new(StatusCodes.Status409Conflict, "TRANSFER_UNAVAILABLE", "One or more wallets cannot process this transfer."),
-            InsufficientBalanceException => new(StatusCodes.Status409Conflict, "INSUFFICIENT_BALANCE", "The source wallet has insufficient available balance."),
             WalletTransferFraudUnavailableException => new(StatusCodes.Status503ServiceUnavailable, "FRAUD_DEPENDENCY_UNAVAILABLE", "The required fraud service is temporarily unavailable."),
-            CurrencyMismatchException => new(StatusCodes.Status400BadRequest, "CURRENCY_MISMATCH", "The wallet currencies do not match."),
-            WalletConcurrencyException => new(StatusCodes.Status409Conflict, "WALLET_CONFLICT", "The wallet state changed concurrently. Retry the operation."),
+
+            PurchaseSessionInvalidException => new(StatusCodes.Status401Unauthorized, "PURCHASE_SESSION_INVALID", "The purchase session is invalid or no longer active."),
+            PurchaseFraudDeniedException => new(StatusCodes.Status403Forbidden, "PURCHASE_FRAUD_DENIED", "The purchase was denied by fraud controls."),
+            PurchaseFraudReviewRequiredException => new(StatusCodes.Status202Accepted, "PURCHASE_REVIEW_REQUIRED", "The purchase requires additional review and no money was moved."),
+            PurchaseFraudUnavailableException => new(StatusCodes.Status503ServiceUnavailable, "FRAUD_DEPENDENCY_UNAVAILABLE", "The required fraud service is temporarily unavailable."),
+            PurchaseUnavailableException => new(StatusCodes.Status409Conflict, "PURCHASE_UNAVAILABLE", "The wallet or merchant is not available for purchase."),
+            PurchaseIdempotencyConflictException => new(StatusCodes.Status409Conflict, "IDEMPOTENCY_CONFLICT", "The Idempotency-Key was already used with a different purchase request."),
+
+            FraudEventIdempotencyConflictException => new(StatusCodes.Status409Conflict, "FRAUD_IDEMPOTENCY_CONFLICT", "The Idempotency-Key was already used with a different fraud-evaluated request."),
+            FraudEventNotFoundException => new(StatusCodes.Status404NotFound, "FRAUD_REVIEW_NOT_FOUND", "The fraud review event was not found."),
+            FraudEventReviewConflictException => new(StatusCodes.Status409Conflict, "FRAUD_REVIEW_CONFLICT", "The fraud event is no longer pending review."),
+
             BankAccountWalletNotFoundException => new(StatusCodes.Status404NotFound, "WALLET_NOT_FOUND", "The wallet was not found."),
             BankAccountConcurrencyException => new(StatusCodes.Status409Conflict, "BANK_ACCOUNT_CONFLICT", "The bank account state changed concurrently. Retry the operation."),
             BankMoneyMovementAccountUnavailableException => new(StatusCodes.Status404NotFound, "BANK_ACCOUNT_UNAVAILABLE", "The bank account is not available for this operation."),
             BankMoneyMovementIdempotencyConflictException => new(StatusCodes.Status409Conflict, "IDEMPOTENCY_CONFLICT", "The Idempotency-Key was already used with a different bank movement request."),
-            PurchaseUnavailableException => new(StatusCodes.Status409Conflict, "PURCHASE_UNAVAILABLE", "The wallet or merchant is not available for purchase."),
-            PurchaseIdempotencyConflictException => new(StatusCodes.Status409Conflict, "IDEMPOTENCY_CONFLICT", "The Idempotency-Key was already used with a different purchase request."),
+            InboxMessageConflictException => new(StatusCodes.Status409Conflict, "BANK_CALLBACK_CONFLICT", "The callback message identifier was already used with a different payload."),
+            BankCallbackTransactionNotFoundException => new(StatusCodes.Status404NotFound, "BANK_CALLBACK_TRANSACTION_NOT_FOUND", "The callback transaction was not found in FinWallet."),
+
             CorrectionTransactionNotFoundException => new(StatusCodes.Status404NotFound, "TRANSACTION_NOT_FOUND", "The original financial transaction was not found."),
             CorrectionNotAllowedException => new(StatusCodes.Status409Conflict, "CORRECTION_NOT_ALLOWED", "The requested correction is not allowed for the original transaction state or type."),
             CorrectionIdempotencyConflictException => new(StatusCodes.Status409Conflict, "IDEMPOTENCY_CONFLICT", "The Idempotency-Key was already used with a different correction request."),
+
+            InsufficientBalanceException => new(StatusCodes.Status409Conflict, "INSUFFICIENT_BALANCE", "The source wallet has insufficient available balance."),
+            CurrencyMismatchException => new(StatusCodes.Status400BadRequest, "CURRENCY_MISMATCH", "The wallet currencies do not match."),
+            WalletConcurrencyException => new(StatusCodes.Status409Conflict, "WALLET_CONFLICT", "The wallet state changed concurrently. Retry the operation."),
             CutoffProviderException providerException => new(StatusCodes.Status503ServiceUnavailable, providerException.Code, providerException.Message),
             CampaignProviderException providerException => new(StatusCodes.Status503ServiceUnavailable, providerException.Code, providerException.Message),
             ExternalBankProviderException providerException when providerException.IsRetryable => new(StatusCodes.Status503ServiceUnavailable, providerException.Code, providerException.Message),
