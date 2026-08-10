@@ -1,3 +1,6 @@
+using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using FinWallet.Application.Fraud;
 using FinWallet.Domain.Fraud;
 using FinWallet.Domain.Shared;
@@ -5,13 +8,15 @@ using FinWallet.Domain.Shared;
 namespace FinWallet.Application.Transfers;
 
 /// <summary>
-/// TR: Completed idempotency replay kontrolü, server-side risk sinyalleri, internal/external fraud kararı ve atomik financial posting sırasını yöneten wallet-transfer use-case handler'ıdır.
-/// EN: Wallet-transfer use-case handler coordinating completed-idempotency replay checks, server-side risk signals, internal/external fraud decisions and atomic financial posting in the required order.
+/// TR: Completed idempotency replay kontrolü, durable FraudEvent/manual-review state'i, server-side risk sinyalleri, internal/external fraud kararı ve atomik financial posting sırasını yöneten wallet-transfer use-case handler'ıdır.
+/// EN: Wallet-transfer use-case handler coordinating completed-idempotency replay, durable FraudEvent/manual-review state, server-side risk signals, internal/external fraud decisions and atomic financial posting in the required order.
 /// </summary>
 public sealed class ExecuteWalletTransferHandler
 {
+    private const string FraudOperation = "WalletTransfer";
     private readonly IWalletTransferReplayStore _replayStore;
     private readonly IWalletTransferRiskSignalStore _riskSignalStore;
+    private readonly IFraudEventStore _fraudEventStore;
     private readonly InternalFraudEngine _internalFraudEngine;
     private readonly IExternalFraudProvider _externalFraudProvider;
     private readonly FraudDecisionPolicy _fraudDecisionPolicy;
@@ -21,6 +26,7 @@ public sealed class ExecuteWalletTransferHandler
     /// <summary>TR: Wallet-transfer orchestration bağımlılıklarıyla handler'ı oluşturur. EN: Creates the handler with wallet-transfer orchestration dependencies.</summary>
     /// <param name="replayStore">TR: Completed durable idempotency replay read boundary'si. EN: Read boundary for completed durable-idempotency replay.</param>
     /// <param name="riskSignalStore">TR: Server-side transfer risk signal read boundary'si. EN: Server-side transfer risk-signal read boundary.</param>
+    /// <param name="fraudEventStore">TR: Fraud karar/review state'ini durable saklayan boundary. EN: Boundary durably storing fraud-decision/review state.</param>
     /// <param name="internalFraudEngine">TR: FinWallet internal rule-based fraud engine'i. EN: FinWallet internal rule-based fraud engine.</param>
     /// <param name="externalFraudProvider">TR: FakeFraud/gerçek provider bağımsız external fraud boundary'si. EN: External fraud boundary independent from FakeFraud/real provider.</param>
     /// <param name="fraudDecisionPolicy">TR: Internal ve external fraud kararlarını birleştiren policy. EN: Policy combining internal and external fraud decisions.</param>
@@ -29,6 +35,7 @@ public sealed class ExecuteWalletTransferHandler
     public ExecuteWalletTransferHandler(
         IWalletTransferReplayStore replayStore,
         IWalletTransferRiskSignalStore riskSignalStore,
+        IFraudEventStore fraudEventStore,
         InternalFraudEngine internalFraudEngine,
         IExternalFraudProvider externalFraudProvider,
         FraudDecisionPolicy fraudDecisionPolicy,
@@ -37,6 +44,7 @@ public sealed class ExecuteWalletTransferHandler
     {
         _replayStore = replayStore ?? throw new ArgumentNullException(nameof(replayStore));
         _riskSignalStore = riskSignalStore ?? throw new ArgumentNullException(nameof(riskSignalStore));
+        _fraudEventStore = fraudEventStore ?? throw new ArgumentNullException(nameof(fraudEventStore));
         _internalFraudEngine = internalFraudEngine ?? throw new ArgumentNullException(nameof(internalFraudEngine));
         _externalFraudProvider = externalFraudProvider ?? throw new ArgumentNullException(nameof(externalFraudProvider));
         _fraudDecisionPolicy = fraudDecisionPolicy ?? throw new ArgumentNullException(nameof(fraudDecisionPolicy));
@@ -45,22 +53,29 @@ public sealed class ExecuteWalletTransferHandler
     }
 
     /// <summary>
-    /// TR: Aynı request daha önce tamamlandıysa doğrudan replay eder; aksi halde server-side fraud preflight'i tamamlar ve yalnız Allow kararında atomic posting başlatır.
-    /// EN: Directly replays an already completed identical request; otherwise completes server-side fraud preflight and starts atomic posting only when the combined decision is Allow.
+    /// TR: Aynı request daha önce tamamlandıysa doğrudan replay eder; durable fraud sonucu varsa provider'ı tekrar çağırmadan uygular; aksi halde fraud preflight'i kaydeder ve yalnız Allow/Approved kararında atomic posting başlatır.
+    /// EN: Directly replays an already completed request; applies an existing durable fraud result without calling the provider again; otherwise records fraud preflight and starts atomic posting only after Allow/Approved.
     /// </summary>
     /// <param name="command">TR: Authenticated session transfer command'ı. EN: Authenticated-session transfer command.</param>
     /// <param name="cancellationToken">TR: SQL ve external fraud çağrılarına yayılan request iptal sinyali. EN: Request cancellation signal propagated to SQL and external-fraud calls.</param>
     /// <returns>TR: Yeni veya replay edilmiş Completed transfer sonucunu döndürür. EN: Returns newly completed or replayed Completed transfer result.</returns>
-    public async Task<WalletTransferPostingResult> HandleAsync(
-        ExecuteWalletTransferCommand command,
-        CancellationToken cancellationToken)
+    public async Task<WalletTransferPostingResult> HandleAsync(ExecuteWalletTransferCommand command, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(command);
 
         var replay = await _replayStore.TryGetCompletedAsync(command.PostingRequest, cancellationToken);
-        if (replay is not null)
+        if (replay is not null) return replay;
+
+        var requestHash = CreateFraudRequestHash(command.PostingRequest);
+        var durableFraud = await _fraudEventStore.FindAsync(
+            FraudOperation,
+            command.PostingRequest.CustomerId,
+            command.PostingRequest.IdempotencyKey,
+            requestHash,
+            cancellationToken);
+        if (durableFraud is not null)
         {
-            return replay;
+            return await ContinueFromDurableFraudAsync(durableFraud, command.PostingRequest, cancellationToken);
         }
 
         var evaluatedAt = _timeProvider.GetUtcNow();
@@ -87,6 +102,17 @@ public sealed class ExecuteWalletTransferHandler
 
         if (internalResult.Decision == FraudDecision.Deny)
         {
+            await _fraudEventStore.SaveAsync(
+                FraudOperation,
+                command.PostingRequest.CustomerId,
+                command.PostingRequest.IdempotencyKey,
+                requestHash,
+                internalResult.Decision,
+                externalDecision: null,
+                FraudDecision.Deny,
+                internalResult.ReasonCodes,
+                evaluatedAt,
+                cancellationToken);
             throw new WalletTransferFraudDeniedException();
         }
 
@@ -97,7 +123,7 @@ public sealed class ExecuteWalletTransferHandler
                 new ExternalFraudEvaluationContext(
                     evaluationReference,
                     command.PostingRequest.CustomerId,
-                    "WalletTransfer",
+                    FraudOperation,
                     amount.Amount,
                     amount.Currency.ToString(),
                     signals.CountryCode,
@@ -123,16 +149,37 @@ public sealed class ExecuteWalletTransferHandler
         }
 
         var finalDecision = _fraudDecisionPolicy.Combine(internalResult.Decision, externalResult.Decision);
-        switch (finalDecision)
+        var reasons = internalResult.ReasonCodes.Concat(externalResult.ReasonCodes).Distinct(StringComparer.Ordinal).ToArray();
+        var fraudEvent = await _fraudEventStore.SaveAsync(
+            FraudOperation,
+            command.PostingRequest.CustomerId,
+            command.PostingRequest.IdempotencyKey,
+            requestHash,
+            internalResult.Decision,
+            externalResult.Decision,
+            finalDecision,
+            reasons,
+            evaluatedAt,
+            cancellationToken);
+
+        return await ContinueFromDurableFraudAsync(fraudEvent, command.PostingRequest, cancellationToken);
+    }
+
+    private async Task<WalletTransferPostingResult> ContinueFromDurableFraudAsync(FraudEventRecord fraudEvent, WalletTransferPostingRequest request, CancellationToken cancellationToken)
+    {
+        if (fraudEvent.ReviewState == FraudReviewState.Pending) throw new WalletTransferFraudReviewRequiredException();
+        if (fraudEvent.ReviewState == FraudReviewState.Denied || fraudEvent.FinalDecision == FraudDecision.Deny) throw new WalletTransferFraudDeniedException();
+        if (fraudEvent.ReviewState == FraudReviewState.Approved || fraudEvent.FinalDecision == FraudDecision.Allow)
         {
-            case FraudDecision.Deny:
-                throw new WalletTransferFraudDeniedException();
-            case FraudDecision.Review:
-                throw new WalletTransferFraudReviewRequiredException();
-            case FraudDecision.Allow:
-                return await _postingStore.PostAsync(command.PostingRequest, cancellationToken);
-            default:
-                throw new InvalidOperationException("Unknown combined fraud decision.");
+            return await _postingStore.PostAsync(request, cancellationToken);
         }
+        if (fraudEvent.FinalDecision == FraudDecision.Review) throw new WalletTransferFraudReviewRequiredException();
+        throw new InvalidOperationException("Unknown durable fraud decision state.");
+    }
+
+    private static string CreateFraudRequestHash(WalletTransferPostingRequest request)
+    {
+        var canonical = string.Join('|', request.SourceWalletId.ToString("N"), request.DestinationWalletId.ToString("N"), request.Amount.ToString("0.0000", CultureInfo.InvariantCulture));
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
     }
 }
