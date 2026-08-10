@@ -51,6 +51,22 @@ jobs:
             test -s "docs/pdf/EN/EN_${name}.pdf"
           done
 
+      - name: Upload generated PDF artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: path-error-pdfs
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            docs/pdf/TR/TR_21-happy-path.pdf
+            docs/pdf/EN/EN_21-happy-path.pdf
+            docs/pdf/TR/TR_22-fraud-path.pdf
+            docs/pdf/EN/EN_22-fraud-path.pdf
+            docs/pdf/TR/TR_23-fail-path.pdf
+            docs/pdf/EN/EN_23-fail-path.pdf
+            docs/pdf/TR/TR_24-error-codes.pdf
+            docs/pdf/EN/EN_24-error-codes.pdf
+
       - name: Commit generated PDFs to pull request branch
         shell: bash
         env:
